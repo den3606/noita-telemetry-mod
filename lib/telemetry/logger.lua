@@ -1,0 +1,426 @@
+local config = dofile_once("mods/noita-telemetry/lib/telemetry/config.lua")
+local errors = dofile_once("mods/noita-telemetry/lib/telemetry/errors.lua")
+
+local json = dofile_once("mods/noita-telemetry/lib/telemetry/json.lua")
+local sync = dofile_once("mods/noita-telemetry/lib/telemetry/sync.lua")
+local native = dofile_once("mods/noita-telemetry/lib/telemetry/native.lua")
+local snapshot_encode = dofile_once("mods/noita-telemetry/lib/telemetry/snapshot_encode.lua")
+local version = dofile_once("mods/noita-telemetry/lib/telemetry/version.lua")
+
+local M = {}
+
+local current_run = nil
+local pending_upload_path = nil
+local append_error_reported = false
+
+local function reset_run_errors()
+  append_error_reported = false
+end
+
+local function join_path(dir, name)
+  return dir .. "/" .. name
+end
+
+function M.get_runs_dir()
+  return config.runs_dir
+end
+
+local function run_file_path(id)
+  return join_path(M.get_runs_dir(), id .. ".run")
+end
+
+local function append_jsonl_line(file, line)
+  file:write(line)
+  file:write("\n")
+  file:flush()
+end
+
+local function write_header(id, started_at)
+  local sync, err_code = config.get_sync()
+  if sync == nil then
+    error(errors.format(err_code or errors.unknown))
+  end
+
+  return json.encode({
+    record = "header",
+    run_id = id,
+    started_at = started_at,
+    client_version = config.client_version,
+    noita_version = version.get(),
+  })
+end
+
+local function write_footer()
+  return json.encode({
+    record = "footer",
+    ended = true,
+  })
+end
+
+local function pos_xy(position)
+  position = position or {}
+  return position.x or 0, position.y or 0
+end
+
+local function hp_values(hp)
+  if type(hp) == "table" then
+    return hp.current or 0, hp.max or 0
+  end
+  if type(hp) == "number" then
+    return hp, hp
+  end
+  return 0, 0
+end
+
+function M.start_run(id, started_at)
+  reset_run_errors()
+
+  current_run = {
+    id = id,
+    started_at = started_at,
+    ended = false,
+    use_native = false,
+    file = nil,
+  }
+
+  local header_json = write_header(id, started_at)
+
+  if native.available() then
+    local ok, err = native.run_open(M.get_runs_dir(), id, header_json)
+    if ok then
+      current_run.use_native = true
+      return current_run
+    end
+    errors.print(errors.logger_run_native_open_failed, { err = tostring(err or "") })
+  end
+
+  local path = run_file_path(id)
+  local file, err = io.open(path, "w")
+  if file == nil then
+    errors.print(errors.logger_run_open_failed, { path = tostring(path), err = tostring(err) })
+    current_run = nil
+    return nil
+  end
+
+  append_jsonl_line(file, header_json)
+  current_run.file = file
+  return current_run
+end
+
+function M.resume_run(id, started_at)
+  reset_run_errors()
+  current_run = {
+    id = id,
+    started_at = started_at,
+    ended = false,
+    use_native = false,
+    file = nil,
+  }
+
+  if native.available() then
+    local ok, err = native.run_resume(M.get_runs_dir(), id)
+    if ok then
+      current_run.use_native = true
+      return current_run
+    end
+    errors.print(errors.logger_run_native_resume_failed, { err = tostring(err or "") })
+  end
+
+  local path = run_file_path(id)
+  local file, err = io.open(path, "a")
+  if file == nil then
+    errors.print(errors.logger_run_open_failed, { path = tostring(path), err = tostring(err) })
+    current_run = nil
+    return nil
+  end
+
+  current_run.file = file
+  return current_run
+end
+
+function M.get_run()
+  return current_run
+end
+
+function M.is_active()
+  return current_run ~= nil and current_run.ended ~= true
+end
+
+function M.append_typed(event_type, fields)
+  if current_run == nil or not current_run.use_native then
+    return false
+  end
+
+  fields = fields or {}
+  local t_ms = fields.t_ms or 0
+  local playtime_sec = fields.playtime_sec or 0
+  local x, y = pos_xy(fields.position)
+  local hp_current, hp_max = hp_values(fields.hp)
+
+  local function dispatch(ok, err)
+    if not ok and err ~= nil and not append_error_reported then
+      append_error_reported = true
+      errors.print(errors.logger_run_append_failed, { err = tostring(err) })
+    end
+    return ok == true
+  end
+
+  local function call_native(fn, ...)
+    local ok, err = fn(...)
+    return dispatch(ok, err)
+  end
+
+  if event_type == "timeline_tick" then
+    return call_native(
+      native.append_timeline_tick,
+      t_ms,
+      playtime_sec,
+      fields.biome or "",
+      x,
+      y,
+      hp_current,
+      hp_max,
+      fields.gold or 0
+    )
+  end
+
+  if event_type == "biome_enter" then
+    return call_native(
+      native.append_biome_enter,
+      t_ms,
+      playtime_sec,
+      fields.biome or "",
+      fields.from_biome or "",
+      x,
+      y
+    )
+  end
+
+  if event_type == "inventory_carry_start" then
+    return call_native(
+      native.append_inventory_carry_start,
+      t_ms,
+      playtime_sec,
+      fields.entity_id or 0,
+      fields.item_id or "",
+      fields.item_type or "",
+      fields.container or "",
+      fields.wand_entity_id
+    )
+  end
+
+  if event_type == "inventory_carry_end" then
+    return call_native(
+      native.append_inventory_carry_end,
+      t_ms,
+      playtime_sec,
+      fields.entity_id or 0,
+      fields.item_id or "",
+      fields.item_type or "",
+      fields.reason or ""
+    )
+  end
+
+  if event_type == "shop_action" then
+    return call_native(
+      native.append_shop_action,
+      t_ms,
+      playtime_sec,
+      x,
+      y,
+      fields.position ~= nil,
+      fields.action or "",
+      fields.gold_before or 0,
+      fields.gold_spent or 0,
+      fields.gold_after or 0,
+      fields.item_id or "",
+      fields.item_type or "",
+      fields.stole == true
+    )
+  end
+
+  if event_type == "perk_pick" then
+    return call_native(
+      native.append_perk_pick,
+      t_ms,
+      playtime_sec,
+      x,
+      y,
+      fields.perk_id or "",
+      fields.perk_index or 0,
+      fields.biome or ""
+    )
+  end
+
+  if event_type == "god_event" then
+    return call_native(
+      native.append_god_event,
+      t_ms,
+      playtime_sec,
+      x,
+      y,
+      fields.angered == true,
+      fields.killed == true,
+      fields.biome or ""
+    )
+  end
+
+  if event_type == "death" then
+    return call_native(
+      native.append_death,
+      t_ms,
+      playtime_sec,
+      fields.biome or "",
+      x,
+      y,
+      fields.killed_by or "",
+      fields.killed_with or ""
+    )
+  end
+
+  if event_type == "run_start" then
+    return call_native(
+      native.append_run_start,
+      t_ms,
+      playtime_sec,
+      fields.seed or 0,
+      fields.ng_plus or 0,
+      fields.game_mode or "",
+      fields.noita_version or "",
+      snapshot_encode.encode_mods(fields.mods_enabled),
+      x,
+      y,
+      hp_current,
+      hp_max,
+      snapshot_encode.encode_wands(fields.wands),
+      snapshot_encode.encode_items(fields.items)
+    )
+  end
+
+  if event_type == "run_end" then
+    return call_native(
+      native.append_run_end,
+      t_ms,
+      playtime_sec,
+      fields.result or "",
+      x,
+      y,
+      hp_current,
+      hp_max,
+      fields.gold or 0,
+      fields.enemies_killed or 0,
+      fields.places_visited or 0,
+      fields.projectiles_shot or 0,
+      snapshot_encode.encode_wands(fields.wands),
+      snapshot_encode.encode_items(fields.items),
+      snapshot_encode.encode_perks(fields.perks)
+    )
+  end
+
+  if event_type == "holy_mountain_enter" then
+    return call_native(
+      native.append_holy_mountain_enter,
+      t_ms,
+      playtime_sec,
+      fields.biome or "",
+      x,
+      y,
+      fields.gold or 0,
+      hp_current,
+      hp_max,
+      fields.wand_count or 0,
+      fields.item_count or 0,
+      snapshot_encode.encode_wands(fields.wands),
+      snapshot_encode.encode_items(fields.items),
+      snapshot_encode.encode_perks(fields.perks)
+    )
+  end
+
+  if event_type == "holy_mountain_exit" then
+    return call_native(
+      native.append_holy_mountain_exit,
+      t_ms,
+      playtime_sec,
+      x,
+      y,
+      fields.gold or 0,
+      fields.gold_spent_total or 0,
+      hp_current,
+      hp_max,
+      fields.stole_any == true,
+      snapshot_encode.encode_wands(fields.wands),
+      snapshot_encode.encode_items(fields.items),
+      snapshot_encode.encode_perks(fields.perks)
+    )
+  end
+
+  return false
+end
+
+function M.append_event(event)
+  if current_run == nil then
+    return false
+  end
+
+  if M.append_typed(event.type, event) then
+    return true
+  end
+
+  local event_json = json.encode(event)
+
+  if current_run.use_native then
+    local ok, err = native.run_append(event_json)
+    if not ok then
+      errors.print(errors.logger_run_append_failed, { err = tostring(err) })
+      return false
+    end
+    return true
+  end
+
+  if current_run.file == nil then
+    return false
+  end
+
+  append_jsonl_line(current_run.file, event_json)
+  return true
+end
+
+function M.end_run()
+  if current_run == nil then
+    return
+  end
+
+  current_run.ended = true
+  local footer_json = write_footer()
+  local path = run_file_path(current_run.id)
+
+  if current_run.use_native then
+    local ok, err = native.run_close(M.get_runs_dir(), current_run.id, footer_json)
+    if not ok then
+      errors.print(errors.logger_run_close_failed, { err = tostring(err or "") })
+    end
+  elseif current_run.file ~= nil then
+    append_jsonl_line(current_run.file, footer_json)
+    current_run.file:close()
+    current_run.file = nil
+  end
+
+  pending_upload_path = path
+  current_run = nil
+end
+
+function M.process_pending_upload()
+  local path = pending_upload_path
+  if path == nil then
+    return
+  end
+
+  pending_upload_path = nil
+  pcall(sync.start_upload_run, path)
+end
+
+function M.poll_upload()
+  pcall(sync.poll_upload)
+end
+
+return M
