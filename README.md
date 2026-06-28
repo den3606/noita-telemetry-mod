@@ -12,4 +12,4 @@ Production MOD release mirror for [noita-telemetry](https://github.com/den3606/n
 Cloud upload: create an API token on the dashboard **Settings** page and save it to
 `mods/noita-telemetry/noita-telemetry.token` (one line).
 
-Built from noita-telemetry v20260628-5492640 (5492640).
+Built from noita-telemetry v20260628-a66a3be (a66a3be).
