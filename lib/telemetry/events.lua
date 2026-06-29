@@ -31,11 +31,11 @@ local state = {
   shop_stock = {},
   run_started_stamp = nil,
   world_seed = nil,
-  deferred_finish = nil,
   run_end_snapshot = nil,
   last_wands_snapshot = nil,
   kolmis_snapshot_cached = false,
   pedestal_snapshot_cached = false,
+  ending_game_completed_at_start = false,
 }
 
 local function copy_wand_stats(stats)
@@ -262,11 +262,11 @@ local function init_run_state(player, scan, options)
   state.poll_counter = 0
   state.run_started_stamp = os.date("!%Y%m%d-%H%M%S")
   state.world_seed = collector.get_world_seed()
-  state.deferred_finish = nil
   state.run_end_snapshot = nil
   state.last_wands_snapshot = nil
   state.kolmis_snapshot_cached = false
   state.pedestal_snapshot_cached = false
+  state.ending_game_completed_at_start = GameHasFlagRun("ending_game_completed")
 
   local playtime_sec = math.floor(collector.get_playtime_sec())
   local interval = config.timeline_interval_sec
@@ -707,7 +707,6 @@ local function finalize_run()
   session.clear()
   persistence.clear()
   state.waiting_for_player = false
-  state.deferred_finish = nil
   state.run_end_snapshot = nil
   state.last_wands_snapshot = nil
 end
@@ -805,16 +804,24 @@ function M.on_player_died(player_entity)
   finish_run(player_entity, result)
 end
 
+local function maybe_finish_on_ending_flag()
+  if not logger.is_active() then
+    return
+  end
+  if state.ending_game_completed_at_start then
+    return
+  end
+  if not GameHasFlagRun("ending_game_completed") then
+    return
+  end
+
+  M.on_victory()
+end
+
 function M.on_world_post_update()
   session.poll_open()
   logger.poll_upload()
-
-  if state.deferred_finish ~= nil then
-    local deferred = state.deferred_finish
-    state.deferred_finish = nil
-    finish_run(deferred.player, deferred.result)
-    return
-  end
+  maybe_finish_on_ending_flag()
 
   if not logger.is_active() then
     return
@@ -878,11 +885,10 @@ function M.on_victory()
     cache_milestone_snapshot(player)
   end
 
-  -- Defer heavy finish work off the ending-sequence hook (kills XML, run close).
-  state.deferred_finish = {
-    player = player,
-    result = "win",
-  }
+  -- Finish synchronously: mountain altar endings (NG+/Pure/Peaceful) can reload the world
+  -- before the next OnWorldPostUpdate. Also poll ending_game_completed for altar paths where
+  -- the player survives (Pure, Toxic Immunity) and sampo_start_ending_sequence never returns.
+  finish_run(player, "win")
 end
 
 return M
