@@ -36,18 +36,39 @@ local function read_last_nonempty_line(path)
   return last_line
 end
 
+local function run_file_has_footer(path)
+  local file = io.open(path, "r")
+  if file == nil then
+    return false
+  end
+
+  for line in file:lines() do
+    if line:find('"event"%s*:%s*"footer"') then
+      file:close()
+      return true
+    end
+  end
+
+  file:close()
+  return false
+end
+
 function M.is_run_file_active(run_id)
   if run_id == nil or run_id == "" then
     return false
   end
 
   local path = run_file_path(run_id)
+  if run_file_has_footer(path) then
+    return false
+  end
+
   local last_line = read_last_nonempty_line(path)
   if last_line == nil then
     return false
   end
 
-  if last_line:find('"record"%s*:%s*"footer"') then
+  if last_line:find('"event"%s*:%s*"footer"') then
     return false
   end
   if last_line:find('"ended"%s*:%s*true') then

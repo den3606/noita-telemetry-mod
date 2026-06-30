@@ -17,6 +17,13 @@ function M.get_frame()
   return GameGetFrameNum()
 end
 
+function M.get_run_playtime_sec(run_start_frame)
+  if run_start_frame == nil then
+    return 0
+  end
+  return math.max(0, math.floor((M.get_frame() - run_start_frame) / FRAMES_PER_SECOND))
+end
+
 function M.get_playtime_sec()
   return M.get_frame() / FRAMES_PER_SECOND
 end

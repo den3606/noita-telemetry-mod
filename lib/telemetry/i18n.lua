@@ -36,7 +36,7 @@ local TEXT = {
       "API token missing — save one line to {path}",
     error_api_unauthorized =
       "API token rejected — recreate in Dashboard Settings and update {path}",
-    error_api_http_failed = "Could not reach API",
+    error_api_http_failed = "Could not reach API{status_suffix}",
     error_api_no_ingest_session = "Run session not open; cannot upload",
     error_api_session_expired = "Session expired — too long since run start; cannot upload",
     error_api_disallowed_mods = "Disallowed mod(s) active; cannot upload",
@@ -96,7 +96,7 @@ local TEXT = {
       "API トークン未設定 — {path} に 1 行で保存してください",
     error_api_unauthorized =
       "API トークンが拒否されました。ダッシュボードで再発行し {path} を更新してください",
-    error_api_http_failed = "API に接続できませんでした",
+    error_api_http_failed = "API に接続できませんでした{status_suffix}",
     error_api_no_ingest_session = "ランセッションが開始されていません。アップロードできません",
     error_api_session_expired = "期間を空けすぎたためセッションが切れており、提出できません",
     error_api_disallowed_mods = "許可されていない MOD が有効です。提出できません",

@@ -1,9 +1,11 @@
 local config = dofile_once("mods/noita-telemetry/lib/telemetry/config.lua")
+local error_phases = dofile_once("mods/noita-telemetry/lib/telemetry/error_phases.lua")
 local errors = dofile_once("mods/noita-telemetry/lib/telemetry/errors.lua")
 local i18n = dofile_once("mods/noita-telemetry/lib/telemetry/i18n.lua")
 local json = dofile_once("mods/noita-telemetry/lib/telemetry/json.lua")
 local link = dofile_once("mods/noita-telemetry/lib/telemetry/link.lua")
 local native = dofile_once("mods/noita-telemetry/lib/telemetry/native.lua")
+local run_diagnostic = dofile_once("mods/noita-telemetry/lib/telemetry/run_diagnostic.lua")
 
 local M = {}
 
@@ -13,6 +15,13 @@ local open_context = nil
 
 local OPEN_RETRY_SEC = 3
 local MAX_OPEN_ATTEMPTS = 3
+
+local function http_target_label(url)
+  if type(url) ~= "string" or url == "" then
+    return "?"
+  end
+  return url:gsub("%?.*", "")
+end
 
 local function schedule_open_retry()
   if open_context ~= nil then
@@ -43,9 +52,26 @@ local function clear_open_context()
   open_context = nil
 end
 
-local function notify_open_failure(err)
+local function open_diag_ctx(run_id, phase)
+  local ctx = {
+    phase = phase,
+    run_path = run_diagnostic.path_for_run_id(run_id),
+    http_method = "POST",
+  }
+  if open_context ~= nil then
+    ctx.http_target = http_target_label(open_context.url)
+    ctx.retry = {
+      attempt = open_context.attempt_count,
+      max = MAX_OPEN_ATTEMPTS,
+    }
+  end
+  return ctx
+end
+
+local function notify_open_failure(run_id, phase, err)
+  local diag_ctx = open_diag_ctx(run_id, phase)
   clear_open_context()
-  errors.report(err)
+  errors.report(err, nil, diag_ctx)
   return select(1, errors.resolve(err))
 end
 
@@ -54,16 +80,21 @@ local function open_attempts_exhausted()
 end
 
 local function handle_retryable_open_failure(err)
-  if open_attempts_exhausted() then
-    notify_open_failure(err or "http_failed")
-    return
-  end
-
   schedule_open_retry()
   i18n.emit_console("status_connect_retry", {
     attempt = open_context.attempt_count,
     max = MAX_OPEN_ATTEMPTS,
   })
+end
+
+local function record_retryable_open_failure(run_id, phase, err)
+  if open_attempts_exhausted() then
+    notify_open_failure(run_id, phase, err or "http_failed")
+    return
+  end
+
+  errors.record_to_run(err or "http_failed", nil, open_diag_ctx(run_id, phase))
+  handle_retryable_open_failure(err or "http_failed")
 end
 
 local function open_retry_due()
@@ -113,6 +144,8 @@ local function build_open_body(run_id, started_at, seed, mods_enabled, game_mode
     game_mode = game_mode,
     noita_version = noita_version,
     mods_enabled = mods_enabled or {},
+    client_version = config.client_version,
+    schema_version = "2",
   })
 end
 
@@ -121,6 +154,7 @@ local function start_async_open()
     return
   end
 
+  local run_id = open_context.run_id
   local ok, err = native.http_request_async(
     "POST",
     open_context.url,
@@ -129,14 +163,14 @@ local function start_async_open()
   )
   if not ok then
     if err == errors.native_export_missing then
-      notify_open_failure(err)
+      notify_open_failure(run_id, error_phases.sync.open.http_start, err)
       return
     end
 
     if is_retryable_err(err or "http_failed") then
-      handle_retryable_open_failure(err or "http_failed")
+      record_retryable_open_failure(run_id, error_phases.sync.open.http_start, err or "http_failed")
     else
-      notify_open_failure(err or "http_failed")
+      notify_open_failure(run_id, error_phases.sync.open.http_start, err or "http_failed")
     end
   end
 end
@@ -169,7 +203,7 @@ function M.queue_open_run(run_id, started_at, seed, mods_enabled, game_mode, noi
 
   local mod_token = link.get_mod_token()
   if mod_token == nil then
-    return false, notify_open_failure("not_authenticated")
+    return false, notify_open_failure(run_id, error_phases.sync.open.queue, "not_authenticated")
   end
 
   open_context = {
@@ -197,6 +231,7 @@ function M.poll_open()
     return
   end
 
+  local run_id = open_context.run_id
   local status, response, err = native.http_request_poll()
   if status == "running" then
     return
@@ -224,11 +259,11 @@ function M.poll_open()
 
   err = err or "http_failed"
   if not is_retryable_err(err) then
-    notify_open_failure(err)
+    notify_open_failure(run_id, error_phases.sync.open.http_poll, err)
     return
   end
 
-  handle_retryable_open_failure(err)
+  record_retryable_open_failure(run_id, error_phases.sync.open.http_poll, err)
 end
 
 return M

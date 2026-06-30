@@ -1,5 +1,6 @@
 local ffi = require("ffi")
 
+local errors = dofile_once("mods/noita-telemetry/lib/telemetry/errors.lua")
 local i18n = dofile_once("mods/noita-telemetry/lib/telemetry/i18n.lua")
 
 local M = {}
@@ -273,6 +274,14 @@ ffi.cdef([[
     size_t error_buf_len
   );
 
+  int telemetry_run_append_diagnostic(
+    const char* runs_dir,
+    const char* run_id,
+    const char* line_json,
+    char* error_buf,
+    size_t error_buf_len
+  );
+
   int telemetry_generate_id(
     char* out_buf,
     size_t out_buf_len
@@ -299,6 +308,8 @@ end
 local pending_http_request = nil
 local pending_upload_request = nil
 
+local NATIVE_ERROR_BUF_LEN = 8192
+
 local function http_target_label(url)
   if type(url) ~= "string" or url == "" then
     return "?"
@@ -306,7 +317,11 @@ local function http_target_label(url)
   return url:gsub("%?.*", "")
 end
 
-local function emit_http_log(method, target, ok, detail, upload)
+local function emit_http_log(method, target, ok, err, upload)
+  local detail = err
+  if type(err) == "string" and err ~= "" then
+    detail = errors.resolve_detail(err)
+  end
   i18n.emit_console(ok and "http_request_ok" or "http_request_failed", {
     method = method or "?",
     target = target or "?",
@@ -381,7 +396,7 @@ function M.http_request(method, url, bearer, body)
   end
 
   local response_buf = ffi.new("char[?]", 8192)
-  local error_buf = ffi.new("char[?]", 256)
+  local error_buf = ffi.new("char[?]", NATIVE_ERROR_BUF_LEN)
   local result = lib.telemetry_http_request(
     method,
     url,
@@ -390,7 +405,7 @@ function M.http_request(method, url, bearer, body)
     response_buf,
     8192,
     error_buf,
-    256
+    NATIVE_ERROR_BUF_LEN
   )
   if result == 0 then
     emit_http_log(method, http_target_label(url), true, nil)
@@ -415,14 +430,14 @@ function M.http_request_async(method, url, bearer, body)
     return false, errors.native_export_missing
   end
 
-  local error_buf = ffi.new("char[?]", 256)
+  local error_buf = ffi.new("char[?]", NATIVE_ERROR_BUF_LEN)
   local result = lib.telemetry_http_request_async(
     method,
     url,
     bearer or "",
     body or "",
     error_buf,
-    256
+    NATIVE_ERROR_BUF_LEN
   )
   if result == 0 then
     pending_http_request = {
@@ -446,8 +461,8 @@ function M.http_request_poll()
   end
 
   local response_buf = ffi.new("char[?]", 8192)
-  local error_buf = ffi.new("char[?]", 256)
-  local result = lib.telemetry_http_request_poll(response_buf, 8192, error_buf, 256)
+  local error_buf = ffi.new("char[?]", NATIVE_ERROR_BUF_LEN)
+  local result = lib.telemetry_http_request_poll(response_buf, 8192, error_buf, NATIVE_ERROR_BUF_LEN)
   if result == HTTP_POLL_RUNNING then
     return "running"
   end
@@ -551,8 +566,8 @@ function M.upload_file(url, api_key, file_path)
   end
 
   local target = http_target_label(url) .. " (upload)"
-  local error_buf = ffi.new("char[?]", 256)
-  local result = lib.telemetry_upload_file(url, api_key, file_path, error_buf, 256)
+  local error_buf = ffi.new("char[?]", NATIVE_ERROR_BUF_LEN)
+  local result = lib.telemetry_upload_file(url, api_key, file_path, error_buf, NATIVE_ERROR_BUF_LEN)
   if result == 0 then
     emit_http_log("POST", target, true, nil, true)
     return true
@@ -577,8 +592,8 @@ function M.upload_file_async(url, api_key, file_path)
   end
 
   local target = http_target_label(url) .. " (upload)"
-  local error_buf = ffi.new("char[?]", 256)
-  local result = lib.telemetry_upload_file_async(url, api_key, file_path, error_buf, 256)
+  local error_buf = ffi.new("char[?]", NATIVE_ERROR_BUF_LEN)
+  local result = lib.telemetry_upload_file_async(url, api_key, file_path, error_buf, NATIVE_ERROR_BUF_LEN)
   if result == 0 then
     pending_upload_request = { target = target }
     return true
@@ -597,8 +612,8 @@ function M.upload_poll()
     return "idle"
   end
 
-  local error_buf = ffi.new("char[?]", 256)
-  local result = lib.telemetry_upload_poll(error_buf, 256)
+  local error_buf = ffi.new("char[?]", NATIVE_ERROR_BUF_LEN)
+  local result = lib.telemetry_upload_poll(error_buf, NATIVE_ERROR_BUF_LEN)
   if result == UPLOAD_POLL_RUNNING then
     return "running"
   end
@@ -685,6 +700,29 @@ function M.run_close(runs_dir, run_id, footer_json)
 
   local error_buf = ffi.new("char[?]", 256)
   local result = lib.telemetry_run_close(runs_dir, run_id, footer_json, error_buf, 256)
+  if result == 0 then
+    return true
+  end
+
+  return false, read_error(error_buf)
+end
+
+function M.run_append_diagnostic(runs_dir, run_id, line_json)
+  if lib == nil then
+    return false, errors.native_dll_missing
+  end
+  if native_export("telemetry_run_append_diagnostic") == nil then
+    return false, errors.native_export_missing
+  end
+
+  local error_buf = ffi.new("char[?]", 256)
+  local result = lib.telemetry_run_append_diagnostic(
+    runs_dir,
+    run_id,
+    line_json,
+    error_buf,
+    256
+  )
   if result == 0 then
     return true
   end

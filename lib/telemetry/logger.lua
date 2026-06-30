@@ -25,6 +25,16 @@ function M.get_runs_dir()
   return config.runs_dir
 end
 
+function M.get_diagnostic_run_path()
+  if current_run ~= nil and current_run.id ~= nil then
+    return run_file_path(current_run.id)
+  end
+  if pending_upload_path ~= nil then
+    return pending_upload_path
+  end
+  return nil
+end
+
 local function run_file_path(id)
   return join_path(M.get_runs_dir(), id .. ".run")
 end
@@ -35,31 +45,38 @@ local function append_jsonl_line(file, line)
   file:flush()
 end
 
-local function write_header(id, started_at)
-  local sync, err_code = config.get_sync()
-  if sync == nil then
-    error(errors.format(err_code or errors.unknown))
+local function utc_timestamp()
+  if os.date ~= nil then
+    return os.date("!%Y-%m-%dT%H:%M:%SZ")
   end
+  return ""
+end
 
+local function write_header(meta)
+  meta = meta or {}
   return json.encode({
-    record = "header",
-    run_id = id,
-    started_at = started_at,
-    client_version = config.client_version,
-    noita_version = version.get(),
+    event = "header",
+    version = "2",
+    at = meta.at,
+    run_id = meta.run_id,
+    client_version = meta.client_version or config.client_version,
+    noita_version = meta.noita_version or version.get(),
+    seed = meta.seed,
+    game_mode = meta.game_mode or "normal",
+    mods_enabled = meta.mods_enabled or {},
   })
 end
 
 local function write_footer()
   return json.encode({
-    record = "footer",
-    ended = true,
+    event = "footer",
+    at = utc_timestamp(),
   })
 end
 
-local function pos_xy(position)
-  position = position or {}
-  return position.x or 0, position.y or 0
+local function pos_xy(pos)
+  pos = pos or {}
+  return pos.x or 0, pos.y or 0
 end
 
 local function hp_values(hp)
@@ -72,7 +89,7 @@ local function hp_values(hp)
   return 0, 0
 end
 
-function M.start_run(id, started_at)
+function M.start_run(id, started_at, header_meta)
   reset_run_errors()
 
   current_run = {
@@ -83,7 +100,16 @@ function M.start_run(id, started_at)
     file = nil,
   }
 
-  local header_json = write_header(id, started_at)
+  header_meta = header_meta or {}
+  local header_json = write_header({
+    at = started_at,
+    run_id = id,
+    client_version = config.client_version,
+    noita_version = header_meta.noita_version,
+    seed = header_meta.seed,
+    game_mode = header_meta.game_mode,
+    mods_enabled = header_meta.mods_enabled,
+  })
 
   if native.available() then
     local ok, err = native.run_open(M.get_runs_dir(), id, header_json)
@@ -146,6 +172,27 @@ function M.is_active()
   return current_run ~= nil and current_run.ended ~= true
 end
 
+function M.append_diagnostic_line(line)
+  if type(line) ~= "string" or line == "" then
+    return false
+  end
+  if current_run == nil or current_run.ended == true then
+    return false
+  end
+
+  if current_run.use_native then
+    local ok = native.run_append_diagnostic(M.get_runs_dir(), current_run.id, line)
+    return ok == true
+  end
+
+  if current_run.file ~= nil then
+    append_jsonl_line(current_run.file, line)
+    return true
+  end
+
+  return false
+end
+
 function M.append_typed(event_type, fields)
   if current_run == nil or not current_run.use_native then
     return false
@@ -154,7 +201,7 @@ function M.append_typed(event_type, fields)
   fields = fields or {}
   local t_ms = fields.t_ms or 0
   local playtime_sec = fields.playtime_sec or 0
-  local x, y = pos_xy(fields.position)
+  local x, y = pos_xy(fields.pos)
   local hp_current, hp_max = hp_values(fields.hp)
 
   local function dispatch(ok, err)
@@ -228,7 +275,7 @@ function M.append_typed(event_type, fields)
       playtime_sec,
       x,
       y,
-      fields.position ~= nil,
+      fields.pos ~= nil,
       fields.action or "",
       fields.gold_before or 0,
       fields.gold_spent or 0,
@@ -362,7 +409,7 @@ function M.append_event(event)
     return false
   end
 
-  if M.append_typed(event.type, event) then
+  if M.append_typed(event.event, event) then
     return true
   end
 

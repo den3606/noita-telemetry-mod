@@ -119,28 +119,30 @@ end
 local function timing_fields()
   return {
     t_ms = collector.get_t_ms(state.run_start_frame),
-    playtime_sec = math.floor(collector.get_playtime_sec()),
+    playtime_sec = collector.get_run_playtime_sec(state.run_start_frame),
   }
 end
 
 local function enrich_event_fields(fields)
   if state.player_entity ~= nil then
-    if fields.position == nil then
-      fields.position = collector.get_position(state.player_entity)
+    if fields.pos == nil then
+      fields.pos = collector.get_position(state.player_entity)
     end
     if fields.biome == nil then
-      fields.biome = collector.get_biome(state.player_entity)
+      fields.biome = collector.get_biome(state.player_entity) or ""
     end
+  end
+  if fields.biome == nil then
+    fields.biome = ""
   end
   return fields
 end
 
-local function emit(event_type, fields)
-  local event = { type = event_type }
-  for key, value in pairs(enrich_event_fields(fields or {})) do
-    event[key] = value
-  end
-  logger.append_event(event)
+local function emit(event_name, fields)
+  fields = enrich_event_fields(fields or {})
+  fields.event = event_name
+  fields.at = utc_timestamp()
+  logger.append_event(fields)
 end
 
 local function copy_perk_counts(counts)
@@ -168,7 +170,7 @@ local function emit_holy_mountain_enter(player)
     t_ms = timing_fields().t_ms,
     playtime_sec = timing_fields().playtime_sec,
     biome = snapshot.biome,
-    position = snapshot.position,
+    pos = snapshot.position,
     gold = snapshot.gold,
     hp = snapshot.hp,
     wands = snapshot.wands,
@@ -188,7 +190,7 @@ local function emit_holy_mountain_exit(player, cached_snapshot)
   emit("holy_mountain_exit", {
     t_ms = timing_fields().t_ms,
     playtime_sec = timing_fields().playtime_sec,
-    position = snapshot.position,
+    pos = snapshot.position,
     gold = snapshot.gold,
     gold_spent_total = state.holy_mountain_spent,
     hp = snapshot.hp,
@@ -268,7 +270,7 @@ local function init_run_state(player, scan, options)
   state.pedestal_snapshot_cached = false
   state.ending_game_completed_at_start = GameHasFlagRun("ending_game_completed")
 
-  local playtime_sec = math.floor(collector.get_playtime_sec())
+  local playtime_sec = collector.get_run_playtime_sec(state.run_start_frame)
   local interval = config.timeline_interval_sec
   state.next_timeline_at = math.floor(playtime_sec / interval + 1) * interval
 end
@@ -287,7 +289,12 @@ function M.begin_run(player)
   local game_mode = collector.get_game_mode()
   local noita_version = collector.get_noita_version()
 
-  logger.start_run(id, started_at)
+  logger.start_run(id, started_at, {
+    seed = world_seed,
+    game_mode = game_mode,
+    mods_enabled = mods_enabled,
+    noita_version = noita_version,
+  })
   persistence.save(id, started_at, state.run_start_frame, state.run_started_stamp, state.world_seed)
 
   session.queue_open_run(id, started_at, world_seed, mods_enabled, game_mode, noita_version)
@@ -300,7 +307,7 @@ function M.begin_run(player)
     game_mode = game_mode,
     noita_version = noita_version,
     mods_enabled = mods_enabled,
-    position = collector.get_position(player),
+    pos = collector.get_position(player),
     hp = collector.get_hp(player),
     wands = scan.wands,
     items = scan.items,
@@ -411,7 +418,7 @@ function M.on_damage_received(
     return
   end
 
-  local position = collector.get_position(player)
+  local pos = collector.get_position(player)
   local hp = collector.get_hp(player)
   local timing = timing_fields()
 
@@ -426,7 +433,7 @@ function M.on_damage_received(
       player
     ),
     biome = collector.get_biome(player),
-    position = position,
+    pos = pos,
     hp_after = hp ~= nil and hp.current or nil,
   })
 end
@@ -449,7 +456,7 @@ local function maybe_emit_biome_enter(player, biome)
     playtime_sec = timing_fields().playtime_sec,
     biome = biome,
     from_biome = from_biome,
-    position = collector.get_position(player),
+    pos = collector.get_position(player),
   })
 
   local entering_holy_mountain = collector.is_holy_mountain_biome(biome)
@@ -506,15 +513,15 @@ local function find_new_inventory_ids(current_ids, previous_ids)
 end
 
 local function emit_shop_action(fields)
-  local position = nil
+  local pos = nil
   if state.player_entity ~= nil then
-    position = collector.get_position(state.player_entity)
+    pos = collector.get_position(state.player_entity)
   end
 
   emit("shop_action", {
     t_ms = timing_fields().t_ms,
     playtime_sec = timing_fields().playtime_sec,
-    position = position,
+    pos = pos,
     action = fields.action,
     gold_before = state.last_gold,
     gold_spent = fields.gold_spent,
@@ -640,7 +647,7 @@ local function maybe_emit_perk_pick(player)
     emit("perk_pick", {
       t_ms = timing_fields().t_ms,
       playtime_sec = timing_fields().playtime_sec,
-      position = collector.get_position(player),
+      pos = collector.get_position(player),
       perk_id = perk_id,
       perk_index = total_before + index,
       options_offered = {},
@@ -659,7 +666,7 @@ local function maybe_emit_god_event(player)
     emit("god_event", {
       t_ms = timing_fields().t_ms,
       playtime_sec = timing_fields().playtime_sec,
-      position = collector.get_position(player),
+      pos = collector.get_position(player),
       angered = true,
       killed = false,
       biome = collector.get_biome(player),
@@ -673,7 +680,7 @@ local function maybe_emit_god_event(player)
       emit("god_event", {
         t_ms = timing_fields().t_ms,
         playtime_sec = timing_fields().playtime_sec,
-        position = collector.get_position(player),
+        pos = collector.get_position(player),
         angered = true,
         killed = true,
         biome = collector.get_biome(player),
@@ -683,7 +690,7 @@ local function maybe_emit_god_event(player)
 end
 
 local function maybe_emit_timeline(player)
-  local playtime_sec = math.floor(collector.get_playtime_sec())
+  local playtime_sec = collector.get_run_playtime_sec(state.run_start_frame)
   if playtime_sec < state.next_timeline_at then
     return
   end
@@ -693,7 +700,7 @@ local function maybe_emit_timeline(player)
     t_ms = timing_fields().t_ms,
     playtime_sec = playtime_sec,
     biome = snapshot.biome,
-    position = snapshot.position,
+    pos = snapshot.position,
     hp = snapshot.hp,
     gold = snapshot.gold,
   })
@@ -720,7 +727,7 @@ end
 
 local function empty_finish_snapshot()
   return {
-    position = { x = 0, y = 0 },
+    pos = { x = 0, y = 0 },
     hp = { current = 0, max = 0 },
     wands = {},
     items = {},
@@ -751,7 +758,7 @@ local function complete_finish_run(player, result)
       t_ms = timing_fields().t_ms,
       playtime_sec = timing_fields().playtime_sec,
       result = result,
-      position = snapshot.position,
+      pos = snapshot.position,
       hp = snapshot.hp,
       wands = snapshot.wands,
       items = snapshot.items,
@@ -788,13 +795,13 @@ function M.on_player_died(player_entity)
   end
 
   state.player_was_dead = true
-  local position = collector.get_position(player_entity)
+  local pos = collector.get_position(player_entity)
 
   emit("death", {
     t_ms = timing_fields().t_ms,
     playtime_sec = timing_fields().playtime_sec,
     biome = collector.get_biome(player_entity),
-    position = position,
+    pos = pos,
     killed_by = StatsGetValue("killed_by") or "",
     killed_with = StatsGetValue("killed_by_extra") or "",
     hp = collector.get_hp(player_entity) or { current = 0, max = 0 },
