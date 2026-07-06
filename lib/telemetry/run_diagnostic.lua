@@ -25,6 +25,15 @@ local function write_line(run_path, line)
     return false
   end
 
+  local file = io.open(run_path, "a")
+  if file ~= nil then
+    file:write(line)
+    file:write("\n")
+    file:flush()
+    file:close()
+    return true
+  end
+
   local logger = dofile_once("mods/noita-telemetry/lib/telemetry/logger.lua")
   if type(logger.append_diagnostic_line) == "function" and logger.append_diagnostic_line(line) then
     return true
@@ -38,16 +47,7 @@ local function write_line(run_path, line)
     print("[NoitaTelemetry] WARN run diagnostic native append failed: " .. tostring(err or ""))
   end
 
-  local file = io.open(run_path, "a")
-  if file == nil then
-    return false
-  end
-
-  file:write(line)
-  file:write("\n")
-  file:flush()
-  file:close()
-  return true
+  return false
 end
 
 function M.path_for_run_id(run_id)

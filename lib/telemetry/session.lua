@@ -71,7 +71,7 @@ end
 local function notify_open_failure(run_id, phase, err)
   local diag_ctx = open_diag_ctx(run_id, phase)
   clear_open_context()
-  errors.report(err, nil, diag_ctx)
+  errors.notify_player(err, nil, diag_ctx, "connect_failed")
   return select(1, errors.resolve(err))
 end
 
@@ -81,20 +81,25 @@ end
 
 local function handle_retryable_open_failure(err)
   schedule_open_retry()
-  i18n.emit_console("status_connect_retry", {
+  i18n.emit("connect_retry", {
     attempt = open_context.attempt_count,
     max = MAX_OPEN_ATTEMPTS,
   })
 end
 
 local function record_retryable_open_failure(run_id, phase, err)
+  err = err or "http_failed"
+  if not errors.is_retryable_api_err(err) then
+    notify_open_failure(run_id, phase, err)
+    return
+  end
   if open_attempts_exhausted() then
-    notify_open_failure(run_id, phase, err or "http_failed")
+    notify_open_failure(run_id, phase, err)
     return
   end
 
-  errors.record_to_run(err or "http_failed", nil, open_diag_ctx(run_id, phase))
-  handle_retryable_open_failure(err or "http_failed")
+  errors.record_to_run(err, nil, open_diag_ctx(run_id, phase))
+  handle_retryable_open_failure(err)
 end
 
 local function open_retry_due()
@@ -103,15 +108,17 @@ local function open_retry_due()
     and os.time() >= open_context.retry_at_sec
 end
 
-local NON_RETRYABLE_CODES = {
-  [errors.api_not_authenticated] = true,
-  [errors.api_unauthorized] = true,
-  [errors.api_disallowed_mods] = true,
-}
-
 local function is_retryable_err(err)
-  local code = select(1, errors.resolve(err))
-  return NON_RETRYABLE_CODES[code] ~= true
+  return errors.is_retryable_api_err(err)
+end
+
+local function parse_open_error_response(response)
+  local wire = errors.parse_error_wire_json(response)
+  if wire ~= nil and type(wire.message) == "string" and wire.message ~= "" then
+    return wire.message
+  end
+  return response:match('"message"%s*:%s*"([^"]+)"')
+    or response:match('"error"%s*:%s*"([^"]+)"')
 end
 
 local function parse_open_response(response)
@@ -126,14 +133,14 @@ local function parse_open_response(response)
     end
   end
 
-  local error_code = response:match('"error"%s*:%s*"([^"]+)"')
-  return { ok = false, error = error_code }
+  local error_code = parse_open_error_response(response)
+  return { ok = false, error = error_code, response = response }
 end
 
 local function apply_open_success(run_id, parsed)
   ingest_token = parsed.ingest_token
   active_run_id = run_id
-  i18n.emit_console("status_connect_ok")
+  i18n.emit("status_connect_ok")
 end
 
 local function build_open_body(run_id, started_at, seed, mods_enabled, game_mode, noita_version)
@@ -253,6 +260,9 @@ function M.poll_open()
       return
     end
     err = (type(parsed) == "table" and parsed.error) or "invalid_response"
+    if type(parsed) == "table" and type(parsed.response) == "string" then
+      err = parsed.response
+    end
   elseif status ~= "failed" then
     return
   end

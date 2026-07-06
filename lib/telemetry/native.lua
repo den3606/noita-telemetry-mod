@@ -190,6 +190,8 @@ ffi.cdef([[
     double y,
     const char* killed_by,
     const char* killed_with,
+    double hp_current,
+    double hp_max,
     char* error_buf,
     size_t error_buf_len
   );
@@ -327,10 +329,13 @@ local function emit_http_log(method, target, ok, err, upload)
     target = target or "?",
     detail = detail or "",
   })
+  if not ok then
+    return
+  end
   if upload then
-    GamePrint(i18n.t(ok and "data_send_ok" or "data_send_failed"))
+    GamePrint(i18n.t("data_send_ok"))
   else
-    GamePrint(i18n.t(ok and "connect_ok" or "connect_failed"))
+    GamePrint(i18n.t("connect_ok"))
   end
 end
 
@@ -860,7 +865,7 @@ function M.append_god_event(t_ms, playtime_sec, x, y, angered, killed, biome)
   )
 end
 
-function M.append_death(t_ms, playtime_sec, biome, x, y, killed_by, killed_with)
+function M.append_death(t_ms, playtime_sec, biome, x, y, killed_by, killed_with, hp_current, hp_max)
   return call_append(
     lib.telemetry_append_death,
     as_i32(t_ms),
@@ -869,7 +874,9 @@ function M.append_death(t_ms, playtime_sec, biome, x, y, killed_by, killed_with)
     x,
     y,
     killed_by,
-    killed_with
+    killed_with,
+    hp_current,
+    hp_max
   )
 end
 

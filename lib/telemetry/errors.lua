@@ -75,6 +75,7 @@ local API_SLUG_TO_CODE = {
   no_ingest_session = M.api_no_ingest_session,
   session_expired = M.api_session_expired,
   disallowed_mods = M.api_disallowed_mods,
+  forbidden = M.api_open_failed,
   started_at_mismatch = M.api_started_at_mismatch,
   run_not_registered = M.api_started_at_mismatch,
   run_already_ingested = M.api_started_at_mismatch,
@@ -126,6 +127,271 @@ local CODE_TO_PHASE = {
   [M.api_generic] = error_phases.sync.upload.http_poll,
 }
 
+-- Mirror native DEFINITIVE_API_ERRORS — do not retry; show reason to the player.
+M.DEFINITIVE_API_SLUGS = {
+  not_authenticated = true,
+  unauthorized = true,
+  disallowed_mods = true,
+  forbidden = true,
+  session_expired = true,
+  started_at_mismatch = true,
+  run_not_registered = true,
+  run_already_ingested = true,
+  invalid_started_at = true,
+  invalid_ended_at = true,
+  daily_ingest_limit = true,
+}
+
+M.NON_RETRYABLE_API_CODES = {
+  [M.api_not_authenticated] = true,
+  [M.api_unauthorized] = true,
+  [M.api_disallowed_mods] = true,
+  [M.api_session_expired] = true,
+  [M.api_started_at_mismatch] = true,
+  [M.api_invalid_started_at] = true,
+  [M.api_invalid_ended_at] = true,
+  [M.api_daily_ingest_limit] = true,
+  [M.api_open_failed] = true,
+}
+
+local function format_mod_list(mods)
+  if type(mods) ~= "table" then
+    return nil
+  end
+  local names = {}
+  for _, mod_id in ipairs(mods) do
+    if type(mod_id) == "string" and mod_id ~= "" then
+      names[#names + 1] = mod_id
+    end
+  end
+  if #names == 0 then
+    return nil
+  end
+  return table.concat(names, ", ")
+end
+
+function M.parse_error_wire_json(body)
+  if type(body) ~= "string" or body == "" then
+    return nil
+  end
+  local ok, parsed = pcall(json.decode, body)
+  if ok and type(parsed) == "table" then
+    if type(parsed.message) == "string" and parsed.message ~= "" then
+      return parsed
+    end
+    if type(parsed.error) == "string" and parsed.error ~= "" then
+      parsed.message = parsed.error
+      return parsed
+    end
+    -- Valid JSON but not ErrorWire (e.g. native diag envelope) — avoid regex on nested fields.
+    return nil
+  end
+
+  local message = body:match('\\"message\\"%s*:%s*\\"([^\\"]+)\\"')
+    or body:match('"message"%s*:%s*"([^"]+)"')
+    or body:match('\\"error\\"%s*:%s*\\"([^\\"]+)\\"')
+    or body:match('"error"%s*:%s*"([^"]+)"')
+  if message == nil then
+    return nil
+  end
+
+  local wire = { message = message }
+  local mods = {}
+  local mods_inner = body:match('\\"disallowed_mods\\"%s*:%s*%[(.-)%]')
+    or body:match('"disallowed_mods"%s*:%s*%[([^%]]*)%]')
+  if mods_inner ~= nil then
+    for mod_id in mods_inner:gmatch('"([^"]+)"') do
+      mods[#mods + 1] = mod_id
+    end
+  end
+  if #mods > 0 then
+    wire.disallowed_mods = mods
+  end
+  return wire
+end
+
+local function wire_from_native_err(input)
+  if type(input) ~= "string" or input:sub(1, 1) ~= "{" then
+    return nil
+  end
+  local diag = M.parse_native_failure(input)
+  if type(diag.http) == "table" and type(diag.http.response) == "string" and diag.http.response ~= "" then
+    local wire = M.parse_error_wire_json(diag.http.response)
+    if wire ~= nil and type(wire.message) == "string" and wire.message ~= "" then
+      return wire
+    end
+  end
+  local wire = M.parse_error_wire_json(input)
+  if wire ~= nil and type(wire.message) == "string" and wire.message ~= "" then
+    return wire
+  end
+  return nil
+end
+
+local function slug_from_native_detail(detail)
+  if type(detail) ~= "string" or detail == "" then
+    return nil
+  end
+  if detail:sub(1, 4) == "api:" then
+    return detail:sub(5)
+  end
+  return M.normalize_api_slug(detail)
+end
+
+local function infer_http_status_code(err)
+  if type(err) ~= "string" then
+    return nil
+  end
+  local status = err:match("http status:?(%d+)")
+    or err:match("http status (%d+)")
+  if status ~= nil then
+    return tonumber(status)
+  end
+  return nil
+end
+
+local function infer_code_from_plain_http_err(err)
+  local status = infer_http_status_code(err)
+  if status == 401 then
+    return M.api_unauthorized
+  end
+  if status == 403 then
+    return M.api_disallowed_mods
+  end
+  if status == 400 then
+    return M.api_open_failed
+  end
+  return nil
+end
+
+local function infer_slug_from_raw(err)
+  if type(err) ~= "string" or err == "" then
+    return nil
+  end
+  if err:find("api:disallowed_mods", 1, true) ~= nil
+    or err:find('"message":"disallowed_mods"', 1, true) ~= nil
+    or err:find('\\"message\\":\\"disallowed_mods\\"', 1, true) ~= nil then
+    return "disallowed_mods"
+  end
+  if err:find("api:unauthorized", 1, true) ~= nil
+    or err:find('"message":"unauthorized"', 1, true) ~= nil
+    or err:find('\\"message\\":\\"unauthorized\\"', 1, true) ~= nil then
+    return "unauthorized"
+  end
+  if err:find("api:not_authenticated", 1, true) ~= nil
+    or err:find('"message":"not_authenticated"', 1, true) ~= nil then
+    return "not_authenticated"
+  end
+  if err:find("api:session_expired", 1, true) ~= nil
+    or err:find('"message":"session_expired"', 1, true) ~= nil then
+    return "session_expired"
+  end
+  if err:sub(1, 4) == "api:" then
+    return err:sub(5)
+  end
+  return nil
+end
+
+local function native_http_status(err)
+  if type(err) ~= "string" then
+    return nil
+  end
+  if err:sub(1, 1) == "{" then
+    local diag = M.parse_native_failure(err)
+    if type(diag.http) == "table" and diag.http.status ~= nil then
+      return tonumber(diag.http.status)
+    end
+  end
+  local status = err:match('"status"%s*:%s*(%d+)')
+    or err:match('\\"status\\"%s*:%s*(%d+)')
+  if status ~= nil then
+    return tonumber(status)
+  end
+  return nil
+end
+
+function M.resolve_api_slug(input)
+  if type(input) == "string" then
+    local inferred = infer_slug_from_raw(input)
+    if inferred ~= nil then
+      return inferred
+    end
+  end
+  if type(input) == "string" and input:sub(1, 1) == "{" then
+    local wire = wire_from_native_err(input)
+    if wire ~= nil and type(wire.message) == "string" and wire.message ~= "" then
+      return wire.message
+    end
+    local diag = M.parse_native_failure(input)
+    local slug = slug_from_native_detail(diag.detail)
+    if slug ~= nil and slug ~= "http_failed" and slug ~= "unknown" then
+      return slug
+    end
+    input = M.resolve_detail(input)
+  end
+  if type(input) ~= "string" or input == "" then
+    return nil
+  end
+  return M.normalize_api_slug(input)
+end
+
+function M.vars_from_api_error(input, vars)
+  vars = vars or {}
+  if type(input) ~= "string" or input:sub(1, 1) ~= "{" then
+    return vars
+  end
+
+  local wire = wire_from_native_err(input)
+  if wire == nil then
+    return vars
+  end
+
+  local mods = format_mod_list(wire.disallowed_mods)
+  if mods ~= nil then
+    vars.mods = mods
+  end
+  if type(wire.message) == "string" and wire.message ~= "" then
+    vars.api_message = wire.message
+  end
+  return vars
+end
+
+function M.is_retryable_api_err(err)
+  local slug = M.resolve_api_slug(err)
+  if slug ~= nil and slug ~= "http_failed" and slug ~= "unknown" then
+    if M.DEFINITIVE_API_SLUGS[slug] == true or API_SLUG_TO_CODE[slug] ~= nil then
+      return false
+    end
+  end
+
+  local status = native_http_status(err)
+  if type(status) == "number" then
+    if status == 408 or status == 429 then
+      -- transient; keep retry unless a definitive slug was found above
+    elseif status >= 400 and status < 500 then
+      return false
+    end
+  end
+
+  if type(err) == "string" and err:match("http status:?%s*4") then
+    return false
+  end
+  if type(err) == "string" and err:match("http status %d") then
+    return false
+  end
+
+  local plain_code = infer_code_from_plain_http_err(err)
+  if plain_code ~= nil and CONNECT_FALLBACK_CODES[plain_code] ~= true then
+    return false
+  end
+
+  local code = select(1, M.resolve(err))
+  if code == M.api_http_failed then
+    return true
+  end
+  return M.NON_RETRYABLE_API_CODES[code] ~= true
+end
+
 local function merge_vars(base, extra)
   if extra == nil then
     return base
@@ -166,7 +432,7 @@ function M.normalize_api_slug(err)
     return "unauthorized"
   end
 
-  if err:match("^http status") or err:match("^request failed") then
+  if err:match("^http status:?%s*") or err:match("^request failed:%s*http status:?%s*") then
     return "http_failed"
   end
 
@@ -240,10 +506,22 @@ function M.resolve(input, vars)
   end
 
   local native_vars
+  local native_diag
   if type(input) == "string" and input:sub(1, 1) == "{" then
-    native_vars, _ = M.vars_from_native_failure(input)
+    native_vars, native_diag = M.vars_from_native_failure(input)
     vars = merge_vars(native_vars, vars)
-    input = M.resolve_detail(input)
+    vars = M.vars_from_api_error(input, vars)
+    local wire = wire_from_native_err(input)
+    if wire ~= nil and type(wire.message) == "string" and wire.message ~= "" then
+      input = wire.message
+    else
+      local slug = slug_from_native_detail(native_diag.detail)
+      if slug ~= nil and slug ~= "http_failed" and slug ~= "unknown" then
+        input = slug
+      else
+        input = M.resolve_detail(input)
+      end
+    end
   end
 
   if type(input) ~= "string" then
@@ -391,6 +669,15 @@ function M.message(code, vars)
   if vars.status_suffix == nil then
     vars.status_suffix = ""
   end
+  if vars.mods == nil then
+    vars.mods = ""
+  end
+  if code == M.api_disallowed_mods then
+    vars.mods_detail = vars.mods ~= "" and (": " .. vars.mods) or ""
+  end
+  if code == M.api_open_failed and (vars.api_message == nil or vars.api_message == "") then
+    vars.api_message = "forbidden"
+  end
   return i18n.t(key, vars)
 end
 
@@ -401,6 +688,15 @@ function M.message_en(code, vars)
   end
   if vars.status_suffix == nil then
     vars.status_suffix = ""
+  end
+  if vars.mods == nil then
+    vars.mods = ""
+  end
+  if code == M.api_disallowed_mods then
+    vars.mods_detail = vars.mods ~= "" and (": " .. vars.mods) or ""
+  end
+  if code == M.api_open_failed and (vars.api_message == nil or vars.api_message == "") then
+    vars.api_message = "forbidden"
   end
   return i18n.t_en(key, vars)
 end
@@ -441,6 +737,57 @@ local function diagnostic_context(diag_ctx, code)
     end
   end
   return ctx
+end
+
+-- Generic connect/upload failure only when nothing more specific is known.
+local CONNECT_FALLBACK_CODES = {
+  [M.api_http_failed] = true,
+  [M.unknown] = true,
+}
+
+local function resolve_for_player(input, vars)
+  local slug = M.resolve_api_slug(input)
+  local code, message_vars = M.resolve(input, vars)
+  message_vars = with_token_path_vars(code, message_vars)
+
+  if slug ~= nil and slug ~= "http_failed" and slug ~= "unknown" then
+    local mapped = API_SLUG_TO_CODE[slug]
+    if mapped ~= nil then
+      code = mapped
+    else
+      code = M.api_generic
+      message_vars = merge_vars(message_vars, { detail = slug })
+    end
+    message_vars = M.vars_from_api_error(input, message_vars)
+    message_vars = with_token_path_vars(code, message_vars)
+  elseif code == M.api_http_failed then
+    local plain_code = infer_code_from_plain_http_err(input)
+    if plain_code ~= nil then
+      code = plain_code
+      message_vars = M.vars_from_api_error(input, message_vars)
+      message_vars = with_token_path_vars(code, message_vars)
+    end
+  end
+
+  return code, message_vars
+end
+
+function M.notify_player(input, vars, diag_ctx, fallback_key)
+  fallback_key = fallback_key or "connect_failed"
+  M.record_to_run(input, vars, diag_ctx)
+  local code, message_vars = resolve_for_player(input, vars)
+
+  if CONNECT_FALLBACK_CODES[code] == true then
+    i18n.emit(fallback_key)
+    return nil
+  end
+  local text = i18n.t("error_prefix", { code = tostring(code) }) .. " " .. M.message(code, message_vars)
+  local text_en = i18n.t_en("error_prefix", { code = tostring(code) })
+    .. " "
+    .. M.message_en(code, message_vars)
+  print(text_en)
+  GamePrint(text)
+  return text
 end
 
 function M.record_to_run(input, vars, diag_ctx)

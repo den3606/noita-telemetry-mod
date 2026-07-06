@@ -54,7 +54,7 @@ end
 
 local function write_header(meta)
   meta = meta or {}
-  return json.encode({
+  local payload = {
     event = "header",
     version = "2",
     at = meta.at,
@@ -64,14 +64,72 @@ local function write_header(meta)
     seed = meta.seed,
     game_mode = meta.game_mode or "normal",
     mods_enabled = meta.mods_enabled or {},
-  })
+  }
+  if meta.is_win == true or meta.is_win == false then
+    payload.is_win = meta.is_win
+  end
+  return json.encode(payload)
 end
 
-local function write_footer()
-  return json.encode({
+local function patch_header_line(path, fields)
+  if type(path) ~= "string" or path == "" or type(fields) ~= "table" then
+    return false
+  end
+
+  local lines = {}
+  local file = io.open(path, "r")
+  if file == nil then
+    return false
+  end
+  for line in file:lines() do
+    lines[#lines + 1] = line
+  end
+  file:close()
+
+  if #lines == 0 then
+    return false
+  end
+
+  local header = json.decode(lines[1])
+  if type(header) ~= "table" or header.event ~= "header" then
+    return false
+  end
+
+  for key, value in pairs(fields) do
+    header[key] = value
+  end
+  lines[1] = json.encode(header)
+
+  file = io.open(path, "w")
+  if file == nil then
+    return false
+  end
+  for index, line in ipairs(lines) do
+    file:write(line)
+    if index < #lines then
+      file:write("\n")
+    end
+  end
+  file:close()
+  return true
+end
+
+local function finalize_header_for_upload(path, is_win)
+  if is_win ~= true and is_win ~= false then
+    return
+  end
+  patch_header_line(path, { is_win = is_win })
+end
+
+local function write_footer(is_win)
+  local payload = {
     event = "footer",
     at = utc_timestamp(),
-  })
+  }
+  if is_win == true or is_win == false then
+    payload.is_win = is_win
+  end
+  return json.encode(payload)
 end
 
 local function pos_xy(pos)
@@ -98,6 +156,7 @@ function M.start_run(id, started_at, header_meta)
     ended = false,
     use_native = false,
     file = nil,
+    is_win = nil,
   }
 
   header_meta = header_meta or {}
@@ -141,6 +200,7 @@ function M.resume_run(id, started_at)
     ended = false,
     use_native = false,
     file = nil,
+    is_win = nil,
   }
 
   if native.available() then
@@ -321,7 +381,9 @@ function M.append_typed(event_type, fields)
       x,
       y,
       fields.killed_by or "",
-      fields.killed_with or ""
+      fields.killed_with or "",
+      hp_current,
+      hp_max
     )
   end
 
@@ -345,6 +407,11 @@ function M.append_typed(event_type, fields)
   end
 
   if event_type == "run_end" then
+    if fields.result == "win" then
+      current_run.is_win = true
+    elseif fields.result == "lose" then
+      current_run.is_win = false
+    end
     return call_native(
       native.append_run_end,
       t_ms,
@@ -409,6 +476,14 @@ function M.append_event(event)
     return false
   end
 
+  if event.event == "run_end" then
+    if event.result == "win" then
+      current_run.is_win = true
+    elseif event.result == "lose" then
+      current_run.is_win = false
+    end
+  end
+
   if M.append_typed(event.event, event) then
     return true
   end
@@ -438,7 +513,7 @@ function M.end_run()
   end
 
   current_run.ended = true
-  local footer_json = write_footer()
+  local footer_json = write_footer(current_run.is_win)
   local path = run_file_path(current_run.id)
 
   if current_run.use_native then
@@ -452,6 +527,7 @@ function M.end_run()
     current_run.file = nil
   end
 
+  finalize_header_for_upload(path, current_run.is_win)
   pending_upload_path = path
   current_run = nil
 end

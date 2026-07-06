@@ -1,6 +1,7 @@
 local config = dofile_once("mods/noita-telemetry/lib/telemetry/config.lua")
 local collector = dofile_once("mods/noita-telemetry/lib/telemetry/collector.lua")
 local damage = dofile_once("mods/noita-telemetry/lib/telemetry/damage.lua")
+local death_cause = dofile_once("mods/noita-telemetry/lib/telemetry/death-cause.lua")
 local snapshots = dofile_once("mods/noita-telemetry/lib/telemetry/snapshots.lua")
 local logger = dofile_once("mods/noita-telemetry/lib/telemetry/logger.lua")
 local run_id = dofile_once("mods/noita-telemetry/lib/telemetry/id.lua")
@@ -802,8 +803,8 @@ function M.on_player_died(player_entity)
     playtime_sec = timing_fields().playtime_sec,
     biome = collector.get_biome(player_entity),
     pos = pos,
-    killed_by = StatsGetValue("killed_by") or "",
-    killed_with = StatsGetValue("killed_by_extra") or "",
+    killed_by = death_cause.sanitize_killed_by(StatsGetValue("killed_by")),
+    killed_with = death_cause.sanitize_killed_with(StatsGetValue("killed_by_extra")),
     hp = collector.get_hp(player_entity) or { current = 0, max = 0 },
   })
 

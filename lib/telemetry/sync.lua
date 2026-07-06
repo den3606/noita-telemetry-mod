@@ -120,7 +120,7 @@ function M.poll_upload()
     return
   end
 
-  errors.print(err, nil, upload_diag_ctx(run_path, error_phases.sync.upload.http_poll))
+  errors.notify_player(err, nil, upload_diag_ctx(run_path, error_phases.sync.upload.http_poll), "data_send_failed")
 end
 
 function M.try_upload_run(run_path)
@@ -133,7 +133,7 @@ function M.try_upload_run(run_path)
     return false
   end
 
-  errors.print(err, nil, diag_ctx)
+  errors.notify_player(err, nil, diag_ctx, "data_send_failed")
   return false
 end
 
