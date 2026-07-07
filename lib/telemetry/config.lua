@@ -57,7 +57,7 @@ end
 
 local M = {
   mod_id = MOD_ID,
-  client_version = "20260706223634",
+  client_version = "20260707081257",
   runs_dir = "mods/noita-telemetry/runs",
   ready = false,
   boot_error_code = nil,

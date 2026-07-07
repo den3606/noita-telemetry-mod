@@ -23,6 +23,7 @@ local state = {
   holy_mountain_stole = false,
   last_gold = 0,
   last_perk_counts = {},
+  telemetry_perk_pick_index = 0,
   prev_inventory_ids = {},
   prev_carried = {},
   stevari_seen = false,
@@ -253,6 +254,7 @@ local function init_run_state(player, scan, options)
   else
     state.last_perk_counts = {}
   end
+  state.telemetry_perk_pick_index = 0
   if scan ~= nil then
     state.prev_inventory_ids = scan.inventory_ids
   else
@@ -631,10 +633,6 @@ end
 
 local function maybe_emit_perk_pick(player)
   local perk_counts = snapshots.get_perk_counts()
-  local total_before = 0
-  for _, count in pairs(state.last_perk_counts) do
-    total_before = total_before + count
-  end
 
   local new_picks = {}
   for perk_id, count in pairs(perk_counts) do
@@ -644,13 +642,16 @@ local function maybe_emit_perk_pick(player)
     end
   end
 
-  for index, perk_id in ipairs(new_picks) do
+  new_picks = snapshots.filter_telemetry_perk_picks(new_picks)
+
+  for _, perk_id in ipairs(new_picks) do
+    state.telemetry_perk_pick_index = state.telemetry_perk_pick_index + 1
     emit("perk_pick", {
       t_ms = timing_fields().t_ms,
       playtime_sec = timing_fields().playtime_sec,
       pos = collector.get_position(player),
       perk_id = perk_id,
-      perk_index = total_before + index,
+      perk_index = state.telemetry_perk_pick_index,
       options_offered = {},
       biome = collector.get_biome(player),
     })

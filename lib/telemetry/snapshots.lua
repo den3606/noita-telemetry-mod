@@ -4,6 +4,66 @@ local M = {}
 
 local FRAMES_PER_SECOND = 60
 local perk_list_ready = false
+local perk_game_effects = nil
+
+-- Perks auto-granted with another altar pick in the same frame (Noita bundled perks).
+local bundled_perk_suppressors = {
+  PROTECTION_EXPLOSION = { "EXPLODING_CORPSES" },
+}
+
+local function ensure_perk_meta()
+  if perk_game_effects ~= nil then
+    return
+  end
+  perk_game_effects = {}
+  if not ensure_perk_list() then
+    return
+  end
+  for _, perk in ipairs(perk_list) do
+    if perk.id and perk.game_effect then
+      perk_game_effects[perk.id] = perk.game_effect
+    end
+  end
+end
+
+local function is_suppressed_telemetry_perk(perk_id, active_ids)
+  ensure_perk_meta()
+  for other_id, _ in pairs(active_ids) do
+    if other_id ~= perk_id then
+      if perk_game_effects and perk_game_effects[other_id] == perk_id then
+        return true
+      end
+      local suppressors = bundled_perk_suppressors[perk_id]
+      if suppressors then
+        for _, parent_id in ipairs(suppressors) do
+          if parent_id == other_id then
+            return true
+          end
+        end
+      end
+    end
+  end
+  return false
+end
+
+function M.filter_telemetry_perk_picks(pick_ids)
+  if #pick_ids <= 1 then
+    return pick_ids
+  end
+
+  local active = {}
+  for _, perk_id in ipairs(pick_ids) do
+    active[perk_id] = true
+  end
+
+  local filtered = {}
+  for _, perk_id in ipairs(pick_ids) do
+    if not is_suppressed_telemetry_perk(perk_id, active) then
+      filtered[#filtered + 1] = perk_id
+    end
+  end
+  return filtered
+end
 
 local function ensure_perk_list()
   if perk_list_ready then
@@ -464,13 +524,21 @@ function M.get_perks(_entity_id)
     return {}
   end
 
+  local counts = M.get_perk_counts()
+  local active = {}
+  for perk_id, count in pairs(counts) do
+    if count > 0 then
+      active[perk_id] = true
+    end
+  end
+
   local perks = {}
   for _, perk in ipairs(perk_list) do
-    local flag_name = get_perk_picked_flag_name(perk.id)
-    local pickup_count = tonumber(GlobalsGetValue(flag_name .. "_PICKUP_COUNT", "0")) or 0
-    if GameHasFlagRun(flag_name) and pickup_count > 0 then
+    local perk_id = perk.id
+    local pickup_count = counts[perk_id] or 0
+    if pickup_count > 0 and not is_suppressed_telemetry_perk(perk_id, active) then
       for _ = 1, pickup_count do
-        perks[#perks + 1] = perk.id
+        perks[#perks + 1] = perk_id
       end
     end
   end
