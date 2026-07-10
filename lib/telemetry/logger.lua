@@ -12,9 +12,11 @@ local M = {}
 local current_run = nil
 local pending_upload_path = nil
 local append_error_reported = false
+local pending_header_patch = nil
 
 local function reset_run_errors()
   append_error_reported = false
+  pending_header_patch = nil
 end
 
 local function join_path(dir, name)
@@ -71,6 +73,13 @@ local function write_header(meta)
   return json.encode(payload)
 end
 
+local function normalize_jsonl_line(line)
+  if type(line) ~= "string" then
+    return ""
+  end
+  return line:gsub("\r$", "")
+end
+
 local function patch_header_line(path, fields)
   if type(path) ~= "string" or path == "" or type(fields) ~= "table" then
     return false
@@ -82,7 +91,7 @@ local function patch_header_line(path, fields)
     return false
   end
   for line in file:lines() do
-    lines[#lines + 1] = line
+    lines[#lines + 1] = normalize_jsonl_line(line)
   end
   file:close()
 
@@ -90,8 +99,8 @@ local function patch_header_line(path, fields)
     return false
   end
 
-  local header = json.decode(lines[1])
-  if type(header) ~= "table" or header.event ~= "header" then
+  local ok, header = pcall(json.decode, lines[1])
+  if not ok or type(header) ~= "table" or header.event ~= "header" then
     return false
   end
 
@@ -104,21 +113,43 @@ local function patch_header_line(path, fields)
   if file == nil then
     return false
   end
-  for index, line in ipairs(lines) do
+  for _, line in ipairs(lines) do
     file:write(line)
-    if index < #lines then
-      file:write("\n")
-    end
+    file:write("\n")
   end
   file:close()
   return true
 end
 
+function M.patch_header(run_id, fields)
+  if type(run_id) ~= "string" or run_id == "" or type(fields) ~= "table" then
+    return false
+  end
+  if current_run ~= nil and current_run.ended ~= true and current_run.id == run_id then
+    pending_header_patch = pending_header_patch or {}
+    for key, value in pairs(fields) do
+      pending_header_patch[key] = value
+    end
+    return true
+  end
+  return patch_header_line(run_file_path(run_id), fields)
+end
+
 local function finalize_header_for_upload(path, is_win)
-  if is_win ~= true and is_win ~= false then
+  local fields = {}
+  if pending_header_patch ~= nil then
+    for key, value in pairs(pending_header_patch) do
+      fields[key] = value
+    end
+    pending_header_patch = nil
+  end
+  if is_win == true or is_win == false then
+    fields.is_win = is_win
+  end
+  if next(fields) == nil then
     return
   end
-  patch_header_line(path, { is_win = is_win })
+  patch_header_line(path, fields)
 end
 
 local function write_footer(is_win)

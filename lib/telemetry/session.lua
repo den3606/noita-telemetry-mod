@@ -222,6 +222,13 @@ function M.queue_open_run(run_id, started_at, seed, mods_enabled, game_mode, noi
     attempt_count = 0,
   }
 
+  local logger = dofile_once("mods/noita-telemetry/lib/telemetry/logger.lua")
+  logger.patch_header(run_id, {
+    game_mode = game_mode,
+    noita_version = noita_version,
+    mods_enabled = mods_enabled or {},
+  })
+
   i18n.emit("status_connecting")
   start_async_open()
   return true

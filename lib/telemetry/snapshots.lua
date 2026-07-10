@@ -11,6 +11,17 @@ local bundled_perk_suppressors = {
   PROTECTION_EXPLOSION = { "EXPLODING_CORPSES" },
 }
 
+local function ensure_perk_list()
+  if perk_list_ready then
+    return true
+  end
+  local ok = pcall(function()
+    dofile_once("data/scripts/perks/perk_list.lua")
+  end)
+  perk_list_ready = ok
+  return ok
+end
+
 local function ensure_perk_meta()
   if perk_game_effects ~= nil then
     return
@@ -63,17 +74,6 @@ function M.filter_telemetry_perk_picks(pick_ids)
     end
   end
   return filtered
-end
-
-local function ensure_perk_list()
-  if perk_list_ready then
-    return true
-  end
-  local ok = pcall(function()
-    dofile_once("data/scripts/perks/perk_list.lua")
-  end)
-  perk_list_ready = ok
-  return ok
 end
 
 local function get_component(entity_id, component_name)
