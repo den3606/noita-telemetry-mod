@@ -131,17 +131,17 @@ local LINES = {
   en = {
     settings_token_setup = {
       "1. Dashboard Settings: create an API token.",
-      "2. Local: save to mods/noita-telemetry/noita-telemetry.token.local",
-      "   Production: save to mods/noita-telemetry/noita-telemetry.token",
+      "2. Paste only the API token (one line) into mods/noita-telemetry/noita-telemetry.token.",
       "3. Restart Noita or start a new run.",
+      "4. After starting a run, check the bottom-left for a connection success message.",
     },
   },
   ja = {
     settings_token_setup = {
-      "1. ダッシュボードの設定で API トークンを作成します。",
-      "2. ローカル: mods/noita-telemetry/noita-telemetry.token.local に 1 行で保存",
-      "   本番: mods/noita-telemetry/noita-telemetry.token に 1 行で保存",
-      "3. Noita を再起動するか、新しいランを開始します。",
+      "1. ダッシュボードの設定で API トークンを作成してください。",
+      "2. API トークンだけを1行で貼り付け、mods/noita-telemetry/noita-telemetry.token として保存してください。",
+      "3. Noita を再起動するか、新しいランを開始してください。",
+      "4. ラン開始後、左下に接続成功の通知が出ることを確認してください。",
     },
   },
 }

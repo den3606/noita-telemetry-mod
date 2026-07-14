@@ -8,6 +8,7 @@ local run_id = dofile_once("mods/noita-telemetry/lib/telemetry/id.lua")
 local persistence = dofile_once("mods/noita-telemetry/lib/telemetry/persistence.lua")
 local session = dofile_once("mods/noita-telemetry/lib/telemetry/session.lua")
 local status = dofile_once("mods/noita-telemetry/lib/telemetry/status.lua")
+local steal_debug = dofile_once("mods/noita-telemetry/lib/telemetry/steal_debug.lua")
 
 local M = {}
 
@@ -31,6 +32,8 @@ local state = {
   player_was_dead = false,
   poll_counter = 0,
   shop_stock = {},
+  pending_shop_removals = {},
+  emitted_steal_entities = {},
   run_started_stamp = nil,
   world_seed = nil,
   run_end_snapshot = nil,
@@ -147,6 +150,11 @@ local function emit(event_name, fields)
   logger.append_event(fields)
 end
 
+local maybe_emit_shop_actions
+local track_shop_stock_changes
+local emit_shop_action
+local try_emit_steal_on_carry
+
 local function copy_perk_counts(counts)
   local copy = {}
   for perk_id, count in pairs(counts) do
@@ -167,6 +175,11 @@ local function emit_holy_mountain_enter(player)
   state.last_gold = snapshot.gold
   state.prev_inventory_ids = snapshots.get_inventory_entity_ids(player)
   state.shop_stock = snapshots.scan_shop_stock(player)
+  local stock_count = 0
+  for _ in pairs(state.shop_stock) do
+    stock_count = stock_count + 1
+  end
+  steal_debug.log_hm_enter(snapshot.gold, stock_count)
 
   emit("holy_mountain_enter", {
     t_ms = timing_fields().t_ms,
@@ -188,6 +201,12 @@ local function emit_holy_mountain_exit(player, cached_snapshot)
     return
   end
 
+  local gold = cached_snapshot and cached_snapshot.gold or collector.get_gold(player)
+  local current_inventory_ids = snapshots.get_inventory_entity_ids(player)
+  steal_debug.log_hm_exit_flush(gold)
+  track_shop_stock_changes(player)
+  maybe_emit_shop_actions(player, gold, current_inventory_ids)
+
   local snapshot = cached_snapshot or snapshots.get_player_snapshot(player)
   emit("holy_mountain_exit", {
     t_ms = timing_fields().t_ms,
@@ -199,8 +218,9 @@ local function emit_holy_mountain_exit(player, cached_snapshot)
     wands = snapshot.wands,
     items = snapshot.items,
     perks = snapshot.perks,
-    stole_any = state.holy_mountain_stole,
   })
+
+  steal_debug.log_hm_exit_done(state.holy_mountain_spent)
 
   state.in_holy_mountain = false
   state.shop_stock = {}
@@ -265,6 +285,9 @@ local function init_run_state(player, scan, options)
   state.stevari_killed = false
   state.player_was_dead = false
   state.poll_counter = 0
+  state.shop_stock = {}
+  state.pending_shop_removals = {}
+  state.emitted_steal_entities = {}
   state.run_started_stamp = os.date("!%Y%m%d-%H%M%S")
   state.world_seed = collector.get_world_seed()
   state.run_end_snapshot = nil
@@ -484,6 +507,41 @@ local function close_open_carries()
   state.prev_carried = {}
 end
 
+local function remove_pending_match(item_id, item_type)
+  for index, meta in ipairs(state.pending_shop_removals) do
+    if meta.item_id == item_id and meta.item_type == item_type then
+      table.remove(state.pending_shop_removals, index)
+      return meta
+    end
+  end
+  return nil
+end
+
+local function pending_matches_item(item_id, item_type)
+  for _, meta in ipairs(state.pending_shop_removals) do
+    if meta.item_id == item_id and meta.item_type == item_type then
+      return true
+    end
+  end
+  return false
+end
+
+track_shop_stock_changes = function(player)
+  if player == nil then
+    return
+  end
+
+  local current_stock = snapshots.scan_shop_stock(player)
+  local disappeared = snapshots.find_disappeared_shop_stock(state.shop_stock, current_stock)
+  if #disappeared > 0 then
+    for _, meta in ipairs(disappeared) do
+      state.pending_shop_removals[#state.pending_shop_removals + 1] = meta
+    end
+    steal_debug.log_pending_added(disappeared, #state.pending_shop_removals)
+  end
+  state.shop_stock = current_stock
+end
+
 local function maybe_emit_carry_changes(player)
   local current = snapshots.get_carried_entities(player)
   local previous = state.prev_carried or {}
@@ -491,6 +549,28 @@ local function maybe_emit_carry_changes(player)
 
   for entity_id, info in pairs(current) do
     if previous[entity_id] == nil then
+      local gold = collector.get_gold(player)
+      local shop_cost = snapshots.get_item_shop_cost(entity_id)
+      local gold_spent = math.max(0, state.last_gold - gold)
+      steal_debug.log_new_carry({
+        entity_id = entity_id,
+        item_id = info.item_id,
+        item_type = info.item_type,
+        container = info.container,
+        biome = collector.get_biome(player) or "",
+        in_holy_mountain = state.in_holy_mountain,
+        gold = gold,
+        last_gold = state.last_gold,
+        shop_cost = shop_cost,
+        in_tracked_stock = state.shop_stock[entity_id] ~= nil,
+        pending_count = #state.pending_shop_removals,
+        would_steal_now = gold_spent == 0
+          and (shop_cost ~= nil
+            or state.shop_stock[entity_id] ~= nil
+            or pending_matches_item(info.item_id, info.item_type)),
+        playtime_sec = timing.playtime_sec,
+      })
+      try_emit_steal_on_carry(player, gold, entity_id, info)
       emit_inventory_carry_start(info, timing.playtime_sec, timing.t_ms)
     end
   end
@@ -515,7 +595,7 @@ local function find_new_inventory_ids(current_ids, previous_ids)
   return new_ids
 end
 
-local function emit_shop_action(fields)
+emit_shop_action = function(fields)
   local pos = nil
   if state.player_entity ~= nil then
     pos = collector.get_position(state.player_entity)
@@ -533,21 +613,70 @@ local function emit_shop_action(fields)
     item_type = fields.item_type or "other",
     stole = fields.stole or false,
   })
+  steal_debug.log_shop_action_emitted(
+    fields.action,
+    fields.item_id or "",
+    fields.item_type or "other",
+    fields.stole or false
+  )
+end
+
+try_emit_steal_on_carry = function(player, gold, entity_id, info)
+  if state.emitted_steal_entities[entity_id] then
+    return false
+  end
+
+  local gold_spent = math.max(0, state.last_gold - gold)
+  if gold_spent > 0 then
+    return false
+  end
+
+  local matched_pending = nil
+  local steal = false
+  if snapshots.has_shop_cost(entity_id) then
+    steal = true
+  else
+    matched_pending = remove_pending_match(info.item_id, info.item_type)
+    if matched_pending ~= nil then
+      steal = true
+    end
+  end
+
+  if not steal then
+    return false
+  end
+
+  state.emitted_steal_entities[entity_id] = true
+  state.holy_mountain_stole = true
+  emit_shop_action({
+    action = "steal",
+    gold_spent = 0,
+    gold_after = gold,
+    item_id = info.item_id,
+    item_type = info.item_type,
+    stole = true,
+  })
+  steal_debug.log_pickup_steal(info.item_id, info.item_type, matched_pending ~= nil, #state.pending_shop_removals)
+  return true
 end
 
 local function emit_shop_steals(player, gold, new_items, current_inventory_ids)
+  local stock_before = state.shop_stock
   local current_stock = snapshots.scan_shop_stock(player)
   local removed_shop = snapshots.find_removed_shop_stock(
-    state.shop_stock,
+    stock_before,
     current_stock,
     current_inventory_ids
   )
   state.shop_stock = current_stock
 
   local steals = snapshots.match_shop_steals(removed_shop, new_items)
+  local cost_by_entity = {}
+  local matched_steal = {}
   for _, item_entity_id in ipairs(new_items) do
+    cost_by_entity[item_entity_id] = snapshots.get_item_shop_cost(item_entity_id)
+    matched_steal[item_entity_id] = false
     if snapshots.has_shop_cost(item_entity_id) then
-      local description = snapshots.describe_item(item_entity_id)
       local already_matched = false
       for _, matched_id in ipairs(steals) do
         if matched_id == item_entity_id then
@@ -560,6 +689,19 @@ local function emit_shop_steals(player, gold, new_items, current_inventory_ids)
       end
     end
   end
+  for _, item_entity_id in ipairs(steals) do
+    matched_steal[item_entity_id] = true
+  end
+
+  steal_debug.log_shop_steal_attempt({
+    new_items = new_items,
+    removed_shop = removed_shop,
+    stock_before = stock_before,
+    stock_after = current_stock,
+    cost_by_entity = cost_by_entity,
+    matched_steal = matched_steal,
+    steal_count = #steals,
+  })
 
   if #steals == 0 then
     return
@@ -567,27 +709,36 @@ local function emit_shop_steals(player, gold, new_items, current_inventory_ids)
 
   state.holy_mountain_stole = true
   for _, item_entity_id in ipairs(steals) do
-    local description = snapshots.describe_item(item_entity_id)
-    emit_shop_action({
-      action = "steal",
-      gold_spent = 0,
-      gold_after = gold,
-      item_id = description.item_id,
-      item_type = description.item_type,
-      stole = true,
-    })
+    if not state.emitted_steal_entities[item_entity_id] then
+      local description = snapshots.describe_item(item_entity_id)
+      state.emitted_steal_entities[item_entity_id] = true
+      remove_pending_match(description.item_id, description.item_type)
+      emit_shop_action({
+        action = "steal",
+        gold_spent = 0,
+        gold_after = gold,
+        item_id = description.item_id,
+        item_type = description.item_type,
+        stole = true,
+      })
+    end
   end
 end
 
-local function maybe_emit_shop_actions(player, gold, current_inventory_ids)
+maybe_emit_shop_actions = function(player, gold, current_inventory_ids)
+  local new_items = find_new_inventory_ids(current_inventory_ids, state.prev_inventory_ids)
+
   if not state.in_holy_mountain then
+    if #new_items > 0 then
+      steal_debug.log_shop_skip("not_in_holy_mountain", gold, #new_items, false)
+    end
     return
   end
 
-  local new_items = find_new_inventory_ids(current_inventory_ids, state.prev_inventory_ids)
   local gold_spent = math.max(0, state.last_gold - gold)
 
   if gold_spent > 0 then
+    steal_debug.log_shop_buy(state.last_gold, gold, #new_items)
     state.holy_mountain_spent = state.holy_mountain_spent + gold_spent
 
     if #new_items > 0 then
@@ -611,8 +762,11 @@ local function maybe_emit_shop_actions(player, gold, current_inventory_ids)
           item_type = description.item_type,
           stole = false,
         })
+        remove_pending_match(description.item_id, description.item_type)
       end
     else
+      steal_debug.log_shop_reroll(state.last_gold, gold)
+      state.pending_shop_removals = {}
       emit_shop_action({
         action = "reroll",
         gold_spent = gold_spent,
@@ -851,6 +1005,10 @@ function M.on_world_post_update()
   local biome = collector.get_biome(player)
   local gold = collector.get_gold(player)
   local current_inventory_ids = snapshots.get_inventory_entity_ids(player)
+
+  if state.in_holy_mountain then
+    track_shop_stock_changes(player)
+  end
 
   maybe_emit_biome_enter(player, biome)
   maybe_emit_shop_actions(player, gold, current_inventory_ids)

@@ -331,6 +331,19 @@ function M.find_removed_shop_stock(previous_stock, current_stock, inventory_ids)
   return removed
 end
 
+--- Shop items that dropped out of the radius scan (includes carried-in-hand / cost zeroed).
+function M.find_disappeared_shop_stock(previous_stock, current_stock)
+  local removed = {}
+
+  for entity_id, meta in pairs(previous_stock or {}) do
+    if current_stock[entity_id] == nil then
+      removed[#removed + 1] = meta
+    end
+  end
+
+  return removed
+end
+
 function M.match_shop_steals(removed_shop, new_item_entity_ids)
   local steals = {}
   local used_removed = {}

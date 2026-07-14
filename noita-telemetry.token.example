@@ -1,4 +1,2 @@
-# Paste your API token from the dashboard (one line, no quotes).
-# Save this file as noita-telemetry.token in the same folder.
-# Used when telemetry_native.dll points at prd (npm run build:native:prd).
-# nt_your_token_here
+Paste only your API token (one line). Save as noita-telemetry.token.
+API トークンだけを1行で貼り付けて、noita-telemetry.token として保存してください。

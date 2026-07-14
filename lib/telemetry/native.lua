@@ -121,6 +121,7 @@ ffi.cdef([[
   int telemetry_append_inventory_carry_start(
     int t_ms,
     int playtime_sec,
+    const char* biome,
     unsigned int entity_id,
     const char* item_id,
     const char* item_type,
@@ -133,6 +134,7 @@ ffi.cdef([[
   int telemetry_append_inventory_carry_end(
     int t_ms,
     int playtime_sec,
+    const char* biome,
     unsigned int entity_id,
     const char* item_id,
     const char* item_type,
@@ -144,6 +146,7 @@ ffi.cdef([[
   int telemetry_append_shop_action(
     int t_ms,
     int playtime_sec,
+    const char* biome,
     double x,
     double y,
     int has_position,
@@ -254,13 +257,13 @@ ffi.cdef([[
   int telemetry_append_holy_mountain_exit(
     int t_ms,
     int playtime_sec,
+    const char* biome,
     double x,
     double y,
     int gold,
     int gold_spent_total,
     double hp_current,
     double hp_max,
-    int stole_any,
     const char* wands_json,
     const char* items_json,
     const char* perks_json,
@@ -778,6 +781,7 @@ end
 function M.append_inventory_carry_start(
   t_ms,
   playtime_sec,
+  biome,
   entity_id,
   item_id,
   item_type,
@@ -788,6 +792,7 @@ function M.append_inventory_carry_start(
     lib.telemetry_append_inventory_carry_start,
     as_i32(t_ms),
     as_i32(playtime_sec),
+    biome,
     as_u32(entity_id),
     item_id,
     item_type,
@@ -796,11 +801,12 @@ function M.append_inventory_carry_start(
   )
 end
 
-function M.append_inventory_carry_end(t_ms, playtime_sec, entity_id, item_id, item_type, reason)
+function M.append_inventory_carry_end(t_ms, playtime_sec, biome, entity_id, item_id, item_type, reason)
   return call_append(
     lib.telemetry_append_inventory_carry_end,
     as_i32(t_ms),
     as_i32(playtime_sec),
+    biome,
     as_u32(entity_id),
     item_id,
     item_type,
@@ -811,6 +817,7 @@ end
 function M.append_shop_action(
   t_ms,
   playtime_sec,
+  biome,
   x,
   y,
   has_position,
@@ -826,6 +833,7 @@ function M.append_shop_action(
     lib.telemetry_append_shop_action,
     as_i32(t_ms),
     as_i32(playtime_sec),
+    biome,
     x,
     y,
     as_i32(bool_flag(has_position)),
@@ -984,13 +992,13 @@ end
 function M.append_holy_mountain_exit(
   t_ms,
   playtime_sec,
+  biome,
   x,
   y,
   gold,
   gold_spent_total,
   hp_current,
   hp_max,
-  stole_any,
   wands_json,
   items_json,
   perks_json
@@ -999,13 +1007,13 @@ function M.append_holy_mountain_exit(
     lib.telemetry_append_holy_mountain_exit,
     as_i32(t_ms),
     as_i32(playtime_sec),
+    biome,
     x,
     y,
     as_i32(gold),
     as_i32(gold_spent_total),
     hp_current,
     hp_max,
-    as_i32(bool_flag(stole_any)),
     wands_json,
     items_json,
     perks_json
