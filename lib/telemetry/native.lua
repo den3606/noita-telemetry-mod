@@ -73,6 +73,18 @@ ffi.cdef([[
     size_t error_buf_len
   );
 
+  int telemetry_streak_get(
+    int* out_streak,
+    char* error_buf,
+    size_t error_buf_len
+  );
+
+  int telemetry_streak_set(
+    int streak,
+    char* error_buf,
+    size_t error_buf_len
+  );
+
   int telemetry_run_open(
     const char* runs_dir,
     const char* run_id,
@@ -342,6 +354,25 @@ local function emit_http_log(method, target, ok, err, upload)
   end
 end
 
+local function emit_http_log_for_pending(pending, ok, err)
+  if pending == nil then
+    return
+  end
+  if pending.quiet then
+    local detail = err
+    if type(err) == "string" and err ~= "" then
+      detail = errors.resolve_detail(err)
+    end
+    i18n.emit_console(ok and "http_request_ok" or "http_request_failed", {
+      method = pending.method or "?",
+      target = pending.target or "?",
+      detail = detail or "",
+    })
+    return
+  end
+  emit_http_log(pending.method, pending.target, ok, err)
+end
+
 local function native_export(name)
   if lib == nil then
     return nil
@@ -430,7 +461,7 @@ local HTTP_POLL_RUNNING = 1
 local HTTP_POLL_SUCCESS = 2
 local HTTP_POLL_FAILED = 3
 
-function M.http_request_async(method, url, bearer, body)
+function M.http_request_async(method, url, bearer, body, opts)
   if lib == nil then
     return false, errors.native_dll_missing
   end
@@ -451,6 +482,7 @@ function M.http_request_async(method, url, bearer, body)
     pending_http_request = {
       method = method,
       target = http_target_label(url),
+      quiet = type(opts) == "table" and opts.quiet == true,
     }
     return true
   end
@@ -477,18 +509,14 @@ function M.http_request_poll()
   if result == HTTP_POLL_SUCCESS then
     local pending = pending_http_request
     pending_http_request = nil
-    if pending ~= nil then
-      emit_http_log(pending.method, pending.target, true, nil)
-    end
+    emit_http_log_for_pending(pending, true, nil)
     return "success", ffi.string(response_buf)
   end
   if result == HTTP_POLL_FAILED then
     local pending = pending_http_request
     pending_http_request = nil
     local err = read_error(error_buf)
-    if pending ~= nil then
-      emit_http_log(pending.method, pending.target, false, err)
-    end
+    emit_http_log_for_pending(pending, false, err)
     return "failed", nil, err
   end
   return "idle"
@@ -652,6 +680,51 @@ function M.apply_streak_patch()
 
   local error_buf = ffi.new("char[?]", 256)
   local result = lib.telemetry_streak_patch_apply(error_buf, 256)
+  if result == 0 then
+    return true
+  end
+
+  return false, read_error(error_buf)
+end
+
+--- Read GlobalStats.session.streak (requires streak patch applied).
+--- @return number|nil streak
+--- @return string|nil err
+function M.get_win_streak()
+  if lib == nil then
+    return nil, "telemetry_native.dll not found (run npm run build:native)"
+  end
+  if native_export("telemetry_streak_get") == nil then
+    return nil, "telemetry_streak_get export missing (rebuild native DLL)"
+  end
+
+  local out = ffi.new("int[1]")
+  local error_buf = ffi.new("char[?]", 256)
+  local result = lib.telemetry_streak_get(out, error_buf, 256)
+  if result == 0 then
+    return tonumber(out[0])
+  end
+
+  return nil, read_error(error_buf)
+end
+
+--- Write GlobalStats.session.streak (requires streak patch applied).
+--- @param streak number
+--- @return boolean ok
+--- @return string|nil err
+function M.set_win_streak(streak)
+  if lib == nil then
+    return false, "telemetry_native.dll not found (run npm run build:native)"
+  end
+  if native_export("telemetry_streak_set") == nil then
+    return false, "telemetry_streak_set export missing (rebuild native DLL)"
+  end
+  if type(streak) ~= "number" or streak ~= math.floor(streak) then
+    return false, "streak must be an integer"
+  end
+
+  local error_buf = ffi.new("char[?]", 256)
+  local result = lib.telemetry_streak_set(streak, error_buf, 256)
   if result == 0 then
     return true
   end

@@ -17,6 +17,10 @@ local TEXT = {
     data_send_ok = "[NoitaTelemetry] Data sent successfully",
     data_send_failed = "[NoitaTelemetry] Data send failed",
     sync_uploaded = "noita-telemetry: uploaded run",
+    run_skipped_ng_plus =
+      "[NoitaTelemetry] NG+ is out of scope — this run will not be recorded or uploaded",
+    run_skipped_ending_completed =
+      "[NoitaTelemetry] Ending already completed — post-clear play will not be recorded or uploaded",
     error_prefix = "[NoitaTelemetry] NTel_ERR_{code}",
     error_native_dll_missing = "Could not load telemetry_native.dll",
     error_native_export_missing = "Native features unavailable (rebuild telemetry_native.dll)",
@@ -53,7 +57,9 @@ local TEXT = {
     error_api_generic = "API request failed ({detail})",
     settings_force_win_streak = "Force win streak with mods",
     settings_force_win_streak_desc =
-      "Patch the game so win streaks count and display while mods are active. Requires unsafe mods and may break on game updates.",
+      "Patch the game so win streaks count and display while mods are active. After each run open, aligns the in-game streak to the dashboard current streak when scopes match. Requires unsafe mods and may break on game updates.",
+    streak_align_corrected =
+      "[NoitaTelemetry] Detected a streak mismatch and corrected the in-game value",
     settings_cloud_upload = "Cloud upload",
     settings_cloud_upload_desc =
       "Upload runs when they end. Without a token, runs are saved locally only.",
@@ -79,6 +85,10 @@ local TEXT = {
     data_send_ok = "[NoitaTelemetry] データ送信が成功しました",
     data_send_failed = "[NoitaTelemetry] データ送信に失敗しました",
     sync_uploaded = "noita-telemetry: ランをアップロードしました",
+    run_skipped_ng_plus =
+      "[NoitaTelemetry] NG+ は対象外のため、このランは記録・アップロードしません",
+    run_skipped_ending_completed =
+      "[NoitaTelemetry] エンディング済みのため、クリア後のプレイは記録・アップロードしません",
     error_prefix = "[NoitaTelemetry] NTel_ERR_{code}",
     error_native_dll_missing = "telemetry_native.dll を読み込めませんでした",
     error_native_export_missing = "ネイティブ機能を利用できません（DLL を再ビルドしてください）",
@@ -115,7 +125,9 @@ local TEXT = {
     error_api_generic = "API リクエストに失敗しました ({detail})",
     settings_force_win_streak = "MOD 有効時の連勝を有効化",
     settings_force_win_streak_desc =
-      "MOD が有効でも連勝が加算・表示されるようゲームにパッチを当てます。Unsafe mods が必要で、ゲーム更新で動かなくなる場合があります。",
+      "MOD が有効でも連勝が加算・表示されるようゲームにパッチを当てます。ラン開始（open）成功後、ダッシュボードの current streak と一致する scope があればゲーム内の値を揃えます。Unsafe mods が必要で、ゲーム更新で動かなくなる場合があります。",
+    streak_align_corrected =
+      "[NoitaTelemetry] ストリークのズレを検知したため、数値を修正しました",
     settings_cloud_upload = "クラウドアップロード",
     settings_cloud_upload_desc =
       "ラン終了時にアップロードします。トークン未設定時はローカル保存のみです。",

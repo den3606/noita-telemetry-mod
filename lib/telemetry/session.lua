@@ -6,6 +6,7 @@ local json = dofile_once("mods/noita-telemetry/lib/telemetry/json.lua")
 local link = dofile_once("mods/noita-telemetry/lib/telemetry/link.lua")
 local native = dofile_once("mods/noita-telemetry/lib/telemetry/native.lua")
 local run_diagnostic = dofile_once("mods/noita-telemetry/lib/telemetry/run_diagnostic.lua")
+local streak_align = dofile_once("mods/noita-telemetry/lib/telemetry/streak_align.lua")
 
 local M = {}
 
@@ -137,10 +138,19 @@ local function parse_open_response(response)
   return { ok = false, error = error_code, response = response }
 end
 
-local function apply_open_success(run_id, parsed)
+local function apply_open_success(run_id, parsed, open_ctx)
   ingest_token = parsed.ingest_token
   active_run_id = run_id
   i18n.emit("status_connect_ok")
+  if open_ctx == nil or not config.force_win_streak_enabled() then
+    return
+  end
+  streak_align.queue_after_open(
+    open_ctx.api_url,
+    open_ctx.mod_token,
+    open_ctx.game_mode,
+    open_ctx.noita_version
+  )
 end
 
 local function build_open_body(run_id, started_at, seed, mods_enabled, game_mode, noita_version)
@@ -194,6 +204,7 @@ function M.clear()
   ingest_token = nil
   active_run_id = nil
   clear_open_context()
+  streak_align.clear()
 end
 
 function M.is_open_pending()
@@ -215,8 +226,11 @@ function M.queue_open_run(run_id, started_at, seed, mods_enabled, game_mode, noi
 
   open_context = {
     run_id = run_id,
+    api_url = sync.api_url,
     url = runs_open_url(sync.api_url),
     mod_token = mod_token,
+    game_mode = game_mode,
+    noita_version = noita_version,
     body = build_open_body(run_id, started_at, seed, mods_enabled, game_mode, noita_version),
     retry_at_sec = nil,
     attempt_count = 0,
@@ -236,12 +250,17 @@ end
 
 function M.poll_open()
   if open_context == nil then
-    native.http_request_poll()
+    if streak_align.is_pending() then
+      streak_align.poll()
+    end
     return
   end
 
   if ingest_token ~= nil then
     clear_open_context()
+    if streak_align.is_pending() then
+      streak_align.poll()
+    end
     return
   end
 
@@ -262,7 +281,8 @@ function M.poll_open()
   if status == "success" then
     local parsed = parse_open_response(response)
     if type(parsed) == "table" and parsed.ok == true and type(parsed.ingest_token) == "string" then
-      apply_open_success(open_context.run_id, parsed)
+      local open_ctx = open_context
+      apply_open_success(open_ctx.run_id, parsed, open_ctx)
       clear_open_context()
       return
     end

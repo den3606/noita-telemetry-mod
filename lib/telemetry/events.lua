@@ -3,6 +3,7 @@ local collector = dofile_once("mods/noita-telemetry/lib/telemetry/collector.lua"
 local damage = dofile_once("mods/noita-telemetry/lib/telemetry/damage.lua")
 local death_cause = dofile_once("mods/noita-telemetry/lib/telemetry/death-cause.lua")
 local snapshots = dofile_once("mods/noita-telemetry/lib/telemetry/snapshots.lua")
+local i18n = dofile_once("mods/noita-telemetry/lib/telemetry/i18n.lua")
 local logger = dofile_once("mods/noita-telemetry/lib/telemetry/logger.lua")
 local run_id = dofile_once("mods/noita-telemetry/lib/telemetry/id.lua")
 local persistence = dofile_once("mods/noita-telemetry/lib/telemetry/persistence.lua")
@@ -389,6 +390,34 @@ function M.resume_run(player)
   )
 end
 
+local function abandon_run_without_upload()
+  if logger.is_active() then
+    logger.end_run()
+    logger.discard_pending_upload()
+  end
+  session.clear()
+  persistence.clear()
+  state.waiting_for_player = false
+  state.run_end_snapshot = nil
+  state.last_wands_snapshot = nil
+end
+
+--- Returns an i18n key when this world should not start/resume ntel recording.
+local function skip_recording_reason()
+  if collector.get_ng_plus() > 0 then
+    return "run_skipped_ng_plus"
+  end
+  if GameHasFlagRun ~= nil and GameHasFlagRun("ending_game_completed") then
+    return "run_skipped_ending_completed"
+  end
+  return nil
+end
+
+local function skip_recording(reason_key)
+  abandon_run_without_upload()
+  i18n.emit(reason_key)
+end
+
 function M.on_world_initialized()
   if logger.is_active() then
     return
@@ -408,6 +437,13 @@ end
 function M.on_player_spawned(player_entity)
   if not logger.is_active() and state.waiting_for_player then
     state.waiting_for_player = false
+    -- NG+ and post-clear (ending already completed) worlds are not recorded.
+    local skip_key = skip_recording_reason()
+    if skip_key ~= nil then
+      state.resuming = false
+      skip_recording(skip_key)
+      return
+    end
     if state.resuming then
       state.resuming = false
       M.resume_run(player_entity)
@@ -595,6 +631,32 @@ local function find_new_inventory_ids(current_ids, previous_ids)
   return new_ids
 end
 
+--- Top-level inventory arrivals plus items that landed on a wand that already existed.
+--- Spells/potions placed onto an existing wand never appear in GameGetAllInventoryItems (#68).
+local function find_new_shop_buy_entity_ids(player, current_inventory_ids)
+  local new_ids = find_new_inventory_ids(current_inventory_ids, state.prev_inventory_ids)
+  local seen = {}
+  for _, entity_id in ipairs(new_ids) do
+    seen[entity_id] = true
+  end
+
+  local current_carried = snapshots.get_carried_entities(player)
+  local previous_carried = state.prev_carried or {}
+  for entity_id, info in pairs(current_carried) do
+    if seen[entity_id] ~= true
+      and previous_carried[entity_id] == nil
+      and info.container == "wand"
+      and info.wand_entity_id ~= nil
+      and state.prev_inventory_ids[info.wand_entity_id] == true
+    then
+      new_ids[#new_ids + 1] = entity_id
+      seen[entity_id] = true
+    end
+  end
+
+  return new_ids
+end
+
 emit_shop_action = function(fields)
   local pos = nil
   if state.player_entity ~= nil then
@@ -726,11 +788,12 @@ local function emit_shop_steals(player, gold, new_items, current_inventory_ids)
 end
 
 maybe_emit_shop_actions = function(player, gold, current_inventory_ids)
-  local new_items = find_new_inventory_ids(current_inventory_ids, state.prev_inventory_ids)
+  local new_top_level_items = find_new_inventory_ids(current_inventory_ids, state.prev_inventory_ids)
+  local buy_items = find_new_shop_buy_entity_ids(player, current_inventory_ids)
 
   if not state.in_holy_mountain then
-    if #new_items > 0 then
-      steal_debug.log_shop_skip("not_in_holy_mountain", gold, #new_items, false)
+    if #buy_items > 0 then
+      steal_debug.log_shop_skip("not_in_holy_mountain", gold, #buy_items, false)
     end
     return
   end
@@ -738,15 +801,16 @@ maybe_emit_shop_actions = function(player, gold, current_inventory_ids)
   local gold_spent = math.max(0, state.last_gold - gold)
 
   if gold_spent > 0 then
-    steal_debug.log_shop_buy(state.last_gold, gold, #new_items)
+    steal_debug.log_shop_buy(state.last_gold, gold, #buy_items)
     state.holy_mountain_spent = state.holy_mountain_spent + gold_spent
 
-    if #new_items > 0 then
+    -- Reroll is emitted from perk_reroll item_pickup hook, not inferred from residual gold.
+    if #buy_items > 0 then
       local remaining_spent = gold_spent
-      for index, item_entity_id in ipairs(new_items) do
+      for index, item_entity_id in ipairs(buy_items) do
         local description = snapshots.describe_item(item_entity_id)
         local item_spent = remaining_spent
-        if index < #new_items then
+        if index < #buy_items then
           local cost = snapshots.get_item_shop_cost(item_entity_id)
           if cost ~= nil then
             item_spent = cost
@@ -764,22 +828,13 @@ maybe_emit_shop_actions = function(player, gold, current_inventory_ids)
         })
         remove_pending_match(description.item_id, description.item_type)
       end
-    else
-      steal_debug.log_shop_reroll(state.last_gold, gold)
-      state.pending_shop_removals = {}
-      emit_shop_action({
-        action = "reroll",
-        gold_spent = gold_spent,
-        gold_after = gold,
-        item_id = "",
-        item_type = "other",
-        stole = false,
-      })
     end
 
     state.shop_stock = snapshots.scan_shop_stock(player)
-  elseif #new_items > 0 then
-    emit_shop_steals(player, gold, new_items, current_inventory_ids)
+  elseif #new_top_level_items > 0 then
+    -- Steal matching still keys off top-level inventory; wand-slot steals use
+    -- try_emit_steal_on_carry when inventory_carry_start fires.
+    emit_shop_steals(player, gold, new_top_level_items, current_inventory_ids)
   else
     state.shop_stock = snapshots.scan_shop_stock(player)
   end
@@ -1052,10 +1107,42 @@ function M.on_victory()
     cache_milestone_snapshot(player)
   end
 
-  -- Finish synchronously: mountain altar endings (NG+/Pure/Peaceful) can reload the world
+  -- Finish synchronously: mountain altar endings (Pure/Peaceful) can reload the world
   -- before the next OnWorldPostUpdate. Also poll ending_game_completed for altar paths where
   -- the player survives (Pure, Toxic Immunity) and sampo_start_ending_sequence never returns.
+  -- NG+ is handled separately via on_ng_plus_enter (abandon without upload).
   finish_run(player, "win")
+end
+
+-- NG+ entry: abandon in-progress recording without upload (not treated as a clear send).
+function M.on_ng_plus_enter()
+  skip_recording("run_skipped_ng_plus")
+end
+
+--- Perk reroll machine used (data/scripts/perks/perk_reroll.lua item_pickup).
+function M.on_perk_reroll(entity_item, entity_who_picked)
+  if not logger.is_active() then
+    return
+  end
+
+  local player = entity_who_picked or collector.get_player_entity() or state.player_entity
+  local gold_after = collector.get_gold(player)
+  local cost = snapshots.get_item_shop_cost(entity_item)
+  local gold_spent = cost
+  if gold_spent == nil then
+    gold_spent = math.max(0, state.last_gold - gold_after)
+  end
+
+  steal_debug.log_shop_reroll(state.last_gold, gold_after)
+  state.pending_shop_removals = {}
+  emit_shop_action({
+    action = "reroll",
+    gold_spent = gold_spent,
+    gold_after = gold_after,
+    item_id = "",
+    item_type = "other",
+    stole = false,
+  })
 end
 
 return M

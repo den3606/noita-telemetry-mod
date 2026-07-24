@@ -562,8 +562,13 @@ function M.end_run()
   end
 
   finalize_header_for_upload(path, current_run.is_win)
+  -- Queue at most one upload per finished run.
   pending_upload_path = path
   current_run = nil
+end
+
+function M.discard_pending_upload()
+  pending_upload_path = nil
 end
 
 function M.process_pending_upload()

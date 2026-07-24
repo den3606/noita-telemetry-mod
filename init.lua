@@ -24,6 +24,11 @@ ModLuaFileAppend(
   "mods/noita-telemetry/hooks/ngplus_append.lua"
 )
 
+ModLuaFileAppend(
+  "data/scripts/perks/perk_reroll.lua",
+  "mods/noita-telemetry/hooks/perk_reroll_append.lua"
+)
+
 local events = dofile_once("mods/noita-telemetry/lib/telemetry/events.lua")
 local errors = dofile_once("mods/noita-telemetry/lib/telemetry/errors.lua")
 
@@ -65,6 +70,20 @@ function telemetry_on_victory()
     return
   end
   events.on_victory()
+end
+
+function telemetry_on_ng_plus_enter()
+  if not telemetry_ready() then
+    return
+  end
+  events.on_ng_plus_enter()
+end
+
+function telemetry_on_perk_reroll(entity_item, entity_who_picked)
+  if not telemetry_ready() then
+    return
+  end
+  events.on_perk_reroll(entity_item, entity_who_picked)
 end
 
 function OnWorldInitialized()

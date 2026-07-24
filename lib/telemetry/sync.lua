@@ -74,6 +74,11 @@ function M.upload_run(run_path)
 end
 
 function M.start_upload_run(run_path)
+  -- One in-flight upload at a time (also enforces one send attempt per finished run).
+  if pending_upload_path ~= nil then
+    return false, "upload_in_flight", upload_diag_ctx(run_path, error_phases.sync.upload.queue)
+  end
+
   local ctx, err = upload_context()
   if ctx == nil then
     return false, err, upload_diag_ctx(run_path, error_phases.sync.upload.queue)
@@ -129,7 +134,7 @@ function M.try_upload_run(run_path)
     return true
   end
 
-  if err == "disabled" then
+  if err == "disabled" or err == "upload_in_flight" then
     return false
   end
 
