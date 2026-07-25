@@ -37,9 +37,7 @@ local function parse_current_win_streak(response)
   if type(response) ~= "string" or response == "" then
     return nil
   end
-  if not response:find('"ok"%s*:%s*true') then
-    return nil
-  end
+  -- Success is HTTP 2xx from native; body has no ok wrapper.
   local streak = response:match('"current_win_streak"%s*:%s*(-?%d+)')
   if streak == nil then
     return nil

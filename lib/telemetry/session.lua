@@ -127,11 +127,10 @@ local function parse_open_response(response)
     return nil
   end
 
-  if response:find('"ok"%s*:%s*true') then
-    local token = response:match('"ingest_token"%s*:%s*"([^"]+)"')
-    if token ~= nil then
-      return { ok = true, ingest_token = token }
-    end
+  -- Success is HTTP 2xx from native; body carries ingest_token (no ok wrapper).
+  local token = response:match('"ingest_token"%s*:%s*"([^"]+)"')
+  if token ~= nil then
+    return { ok = true, ingest_token = token }
   end
 
   local error_code = parse_open_error_response(response)
