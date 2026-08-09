@@ -1,0 +1,64 @@
+-- OnWorldPostUpdate: session/upload polling plus the throttled polls/* sweep.
+-- Called from core/events.lua (init.lua never loads this module directly).
+
+local run_state = dofile_once("mods/noita-telemetry/src/core/run/run_state.lua")
+local player_reader = dofile_once("mods/noita-telemetry/src/adapters/noita/player_reader.lua")
+local world_reader = dofile_once("mods/noita-telemetry/src/adapters/noita/world_reader.lua")
+local inventory_reader = dofile_once("mods/noita-telemetry/src/adapters/noita/inventory_reader.lua")
+local loader = dofile_once("mods/noita-telemetry/src/adapters/native/loader.lua")
+local session = dofile_once("mods/noita-telemetry/src/core/run/session.lua")
+local writer = dofile_once("mods/noita-telemetry/src/core/run/writer.lua")
+local shop_action = dofile_once("mods/noita-telemetry/src/core/events/polls/shop_action.lua")
+local biome_enter = dofile_once("mods/noita-telemetry/src/core/events/polls/biome_enter.lua")
+local god_event = dofile_once("mods/noita-telemetry/src/core/events/polls/god_event.lua")
+local timeline_tick = dofile_once("mods/noita-telemetry/src/core/events/polls/timeline_tick.lua")
+local inventory_carry_start = dofile_once("mods/noita-telemetry/src/core/events/polls/inventory_carry_start.lua")
+local inventory_carry_end = dofile_once("mods/noita-telemetry/src/core/events/polls/inventory_carry_end.lua")
+local victory = dofile_once("mods/noita-telemetry/src/core/events/victory.lua")
+
+local M = {}
+
+function M.run()
+  session.poll_open()
+  writer.poll_upload()
+  victory.maybe_finish_on_ending_flag()
+
+  if not writer.is_active() then
+    return
+  end
+
+  local player = player_reader.get_entity_id()
+  if player == nil then
+    return
+  end
+
+  local state = run_state.get()
+  state.player_entity_id = player
+  state.poll_counter = state.poll_counter + 1
+  if state.poll_counter < loader.get_poll_interval_frames() then
+    return
+  end
+  state.poll_counter = 0
+
+  local biome_id = world_reader.get_biome(player)
+  local gold = player_reader.get_gold(player)
+  local current_inventory_ids = inventory_reader.get_inventory_entity_ids(player)
+
+  if state.in_holy_mountain then
+    shop_action.track_shop_stock_changes(state, player)
+  end
+
+  biome_enter.maybe_emit(state, player, biome_id)
+  shop_action.maybe_emit(state, player, gold, current_inventory_ids)
+  god_event.maybe_emit(state, player)
+  timeline_tick.maybe_emit(state, player)
+
+  local current_carried = inventory_reader.get_carried_entities(player)
+  inventory_carry_start.maybe_emit(state, player, current_carried)
+  inventory_carry_end.maybe_emit(state, player, current_carried)
+
+  state.prev_inventory_ids = current_inventory_ids
+  state.last_gold = gold
+end
+
+return M

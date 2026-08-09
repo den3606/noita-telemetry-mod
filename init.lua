@@ -1,117 +1,76 @@
-local streak_patch = dofile_once("mods/noita-telemetry/streak_patch.lua")
-local version = dofile_once("mods/noita-telemetry/lib/telemetry/version.lua")
-local config = dofile_once("mods/noita-telemetry/lib/telemetry/config.lua")
+dofile_once("mods/noita-telemetry/src/boot.lua")
 
-version.init()
-
-ModLuaFileAppend(
-  "data/entities/animals/boss_centipede/boss_centipede_update.lua",
-  "mods/noita-telemetry/hooks/kolmis_defeated_append.lua"
-)
-
-ModLuaFileAppend(
-  "data/entities/animals/boss_centipede/ending/sampo_start_ending_sequence.lua",
-  "mods/noita-telemetry/hooks/pedestal_start_append.lua"
-)
-
-ModLuaFileAppend(
-  "data/entities/animals/boss_centipede/ending/sampo_start_ending_sequence.lua",
-  "mods/noita-telemetry/hooks/victory_append.lua"
-)
-
-ModLuaFileAppend(
-  "data/scripts/newgame_plus.lua",
-  "mods/noita-telemetry/hooks/ngplus_append.lua"
-)
-
-ModLuaFileAppend(
-  "data/scripts/perks/perk_reroll.lua",
-  "mods/noita-telemetry/hooks/perk_reroll_append.lua"
-)
-
-local events = dofile_once("mods/noita-telemetry/lib/telemetry/events.lua")
-local errors = dofile_once("mods/noita-telemetry/lib/telemetry/errors.lua")
+local streak_patch = dofile_once("mods/noita-telemetry/src/core/streak.lua")
+local events = dofile_once("mods/noita-telemetry/src/core/events.lua")
+local message = dofile_once("mods/noita-telemetry/src/core/messaging.lua")
+local safe_call = dofile_once("mods/noita-telemetry/src/core/safe_call.lua")
 
 local function try_apply_streak_patch()
-  if not config.force_win_streak_enabled() then
+  if not streak_patch.is_enabled() then
     return
   end
 
-  local ok, err = pcall(streak_patch.apply)
-  if not ok then
-    errors.print(errors.streak_patch_skipped, { err = tostring(err) })
-  end
-end
-
-local function announce_boot_failure()
-  errors.print(config.boot_error_code or errors.unknown)
-end
-
-local function telemetry_ready()
-  return config.ready == true
-end
-
-function telemetry_on_kolmis_defeated()
-  if not telemetry_ready() then
-    return
-  end
-  events.on_kolmis_defeated()
-end
-
-function telemetry_on_pedestal_start()
-  if not telemetry_ready() then
-    return
-  end
-  events.on_pedestal_start()
-end
-
-function telemetry_on_victory()
-  if not telemetry_ready() then
-    return
-  end
-  events.on_victory()
-end
-
-function telemetry_on_ng_plus_enter()
-  if not telemetry_ready() then
-    return
-  end
-  events.on_ng_plus_enter()
-end
-
-function telemetry_on_perk_reroll(entity_item, entity_who_picked)
-  if not telemetry_ready() then
-    return
-  end
-  events.on_perk_reroll(entity_item, entity_who_picked)
+  safe_call.guard(message.KEYS.MSG_ERROR_STREAK_PATCH_SKIPPED, streak_patch.apply)
 end
 
 function OnWorldInitialized()
   try_apply_streak_patch()
-  if not telemetry_ready() then
-    announce_boot_failure()
-    return
-  end
-  events.on_world_initialized()
+  safe_call.guard(message.KEYS.MSG_ERROR_EVENT_HANDLER_FAILED, events.world_initialized)
 end
 
-function OnPlayerSpawned(player_entity)
-  if not telemetry_ready() then
-    return
-  end
-  events.on_player_spawned(player_entity)
+function OnPlayerSpawned(player_entity_id)
+  safe_call.guard(message.KEYS.MSG_ERROR_EVENT_HANDLER_FAILED, function()
+    events.player_spawned(player_entity_id)
+  end)
 end
 
-function OnPlayerDied(player_entity)
-  if not telemetry_ready() then
-    return
-  end
-  events.on_player_died(player_entity)
+function OnPlayerDied(player_entity_id)
+  safe_call.guard(message.KEYS.MSG_ERROR_EVENT_HANDLER_FAILED, function()
+    events.player_died(player_entity_id)
+  end)
 end
 
 function OnWorldPostUpdate()
-  if not telemetry_ready() then
-    return
-  end
-  events.on_world_post_update()
+  -- Runs every frame; same spam concern as TelemetryOnDamageReceived above.
+  safe_call.silent(events.post_update)
+end
+
+function TelemetryOnDamageReceived(damage, message, entity_thats_responsible, is_fatal, projectile_thats_responsible)
+  safe_call.silent(function()
+    events.damage_received(damage, message, entity_thats_responsible, is_fatal, projectile_thats_responsible)
+  end)
+end
+
+function TelemetryOnKolmiDefeated()
+  safe_call.guard(message.KEYS.MSG_ERROR_EVENT_HANDLER_FAILED, events.kolmis_defeated)
+end
+
+function TelemetryOnPedestalStart()
+  safe_call.guard(message.KEYS.MSG_ERROR_EVENT_HANDLER_FAILED, events.pedestal_start)
+end
+
+function TelemetryOnVictory()
+  safe_call.guard(message.KEYS.MSG_ERROR_EVENT_HANDLER_FAILED, events.victory)
+end
+
+function TelemetryOnNgPlusEnter()
+  safe_call.guard(message.KEYS.MSG_ERROR_EVENT_HANDLER_FAILED, events.ng_plus_enter)
+end
+
+function TelemetryOnPerkReroll(entity_item, entity_who_picked)
+  safe_call.guard(message.KEYS.MSG_ERROR_EVENT_HANDLER_FAILED, function()
+    events.perk_reroll(entity_item, entity_who_picked)
+  end)
+end
+
+function TelemetryOnPerkPick(entity_item, entity_who_picked, item_name)
+  safe_call.guard(message.KEYS.MSG_ERROR_EVENT_HANDLER_FAILED, function()
+    events.perk_pick(entity_item, entity_who_picked, item_name)
+  end)
+end
+
+function TelemetryOnShopItemPickup(entity_item, entity_who_picked, item_name, cost_before)
+  safe_call.guard(message.KEYS.MSG_ERROR_EVENT_HANDLER_FAILED, function()
+    events.shop_item_pickup(entity_item, entity_who_picked, item_name, cost_before)
+  end)
 end
