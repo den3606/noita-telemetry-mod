@@ -12,7 +12,6 @@ local game_mode_rules = dofile_once("mods/noita-telemetry/src/core/game_mode.lua
 local timing = dofile_once("mods/noita-telemetry/src/libs/timing.lua")
 local version = dofile_once("mods/noita-telemetry/src/core/version.lua")
 local inventory_reader = dofile_once("mods/noita-telemetry/src/adapters/noita/inventory_reader.lua")
-local damage_reader = dofile_once("mods/noita-telemetry/src/adapters/noita/damage_reader.lua")
 local writer = dofile_once("mods/noita-telemetry/src/core/run/writer.lua")
 local ulid = dofile_once("mods/noita-telemetry/src/core/ulid.lua")
 local persistence = dofile_once("mods/noita-telemetry/src/core/run/persistence.lua")
@@ -54,8 +53,6 @@ local function init_run_state(state, player, scan)
   state.world_seed = session_reader.get_world_seed()
   state.run_end_snapshot = nil
   state.last_wands_snapshot = nil
-  state.kolmis_snapshot_cached = false
-  state.pedestal_snapshot_cached = false
   state.ending_game_completed_at_start = session_reader.is_ending_completed()
 
   local playtime_sec = timing.elapsed_sec(frame_clock.get_frame(), state.run_start_frame)
@@ -184,7 +181,6 @@ function M.emit(player_entity_id)
   if writer.is_active() then
     state.player_entity_id = player_entity_id
     state.player_was_dead = player_reader.is_dead(player_entity_id)
-    damage_reader.attach_hook(player_entity_id)
   end
 end
 

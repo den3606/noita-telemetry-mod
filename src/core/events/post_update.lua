@@ -15,6 +15,8 @@ local timeline_tick = dofile_once("mods/noita-telemetry/src/core/events/polls/ti
 local inventory_carry_start = dofile_once("mods/noita-telemetry/src/core/events/polls/inventory_carry_start.lua")
 local inventory_carry_end = dofile_once("mods/noita-telemetry/src/core/events/polls/inventory_carry_end.lua")
 local victory = dofile_once("mods/noita-telemetry/src/core/events/victory.lua")
+local ng_plus_enter = dofile_once("mods/noita-telemetry/src/core/events/ng_plus_enter.lua")
+local hook_messages = dofile_once("mods/noita-telemetry/src/core/events/hook_messages.lua")
 
 local M = {}
 
@@ -22,8 +24,13 @@ function M.run()
   session.poll_open()
   writer.poll_upload()
   victory.maybe_finish_on_ending_flag()
+  ng_plus_enter.maybe_abandon_on_ng_plus()
 
   if not writer.is_active() then
+    -- No run starts in this world until the next world_initialized; drop what hooks queued.
+    if not run_state.get().waiting_for_player then
+      hook_messages.discard_pending()
+    end
     return
   end
 
@@ -34,6 +41,8 @@ function M.run()
 
   local state = run_state.get()
   state.player_entity_id = player
+  -- Every frame (not throttled); messages queued before the run opened wait until now.
+  hook_messages.dispatch_pending()
   state.poll_counter = state.poll_counter + 1
   if state.poll_counter < loader.get_poll_interval_frames() then
     return

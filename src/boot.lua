@@ -49,23 +49,6 @@ end
 boot_validate()
 
 ModLuaFileAppend(
-  "data/entities/animals/boss_centipede/boss_centipede_update.lua",
-  "mods/noita-telemetry/src/adapters/noita/hooks/kolmis_defeated_append.lua"
-)
-
-ModLuaFileAppend(
-  "data/entities/animals/boss_centipede/ending/sampo_start_ending_sequence.lua",
-  "mods/noita-telemetry/src/adapters/noita/hooks/pedestal_start_append.lua"
-)
-
-ModLuaFileAppend(
-  "data/entities/animals/boss_centipede/ending/sampo_start_ending_sequence.lua",
-  "mods/noita-telemetry/src/adapters/noita/hooks/victory_append.lua"
-)
-
-ModLuaFileAppend("data/scripts/newgame_plus.lua", "mods/noita-telemetry/src/adapters/noita/hooks/ngplus_append.lua")
-
-ModLuaFileAppend(
   "data/scripts/perks/perk_reroll.lua",
   "mods/noita-telemetry/src/adapters/noita/hooks/perk_reroll_append.lua"
 )

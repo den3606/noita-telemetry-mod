@@ -15,7 +15,10 @@ function M.utc_timestamp()
 end
 
 function M.timing_fields(state)
-  local frame = frame_clock.get_frame()
+  return M.timing_fields_at(state, frame_clock.get_frame())
+end
+
+function M.timing_fields_at(state, frame)
   return {
     t_ms = timing.elapsed_ms(frame, state.run_start_frame),
     playtime_sec = timing.elapsed_sec(frame, state.run_start_frame),

@@ -149,6 +149,34 @@ local function wire_from_native_err(input)
   return nil
 end
 
+local function normalize_api_slug(err)
+  if type(err) ~= "string" or err == "" then
+    return "unknown"
+  end
+
+  if err:sub(1, 4) == "api:" then
+    return err:sub(5)
+  end
+
+  if err:find("401", 1, true) ~= nil then
+    return "unauthorized"
+  end
+
+  if err:match("^http status:?%s*") or err:match("^request failed:%s*http status:?%s*") then
+    return "http_failed"
+  end
+
+  if err:find("telemetry_native.dll not found", 1, true) then
+    return "native_dll_missing"
+  end
+
+  if err:find("native export missing", 1, true) then
+    return "native_export_missing"
+  end
+
+  return err
+end
+
 local function slug_from_native_detail(detail)
   if type(detail) ~= "string" or detail == "" then
     return nil
@@ -229,34 +257,6 @@ local function native_http_status(err)
     return tonumber(status)
   end
   return nil
-end
-
-local function normalize_api_slug(err)
-  if type(err) ~= "string" or err == "" then
-    return "unknown"
-  end
-
-  if err:sub(1, 4) == "api:" then
-    return err:sub(5)
-  end
-
-  if err:find("401", 1, true) ~= nil then
-    return "unauthorized"
-  end
-
-  if err:match("^http status:?%s*") or err:match("^request failed:%s*http status:?%s*") then
-    return "http_failed"
-  end
-
-  if err:find("telemetry_native.dll not found", 1, true) then
-    return "native_dll_missing"
-  end
-
-  if err:find("native export missing", 1, true) then
-    return "native_export_missing"
-  end
-
-  return err
 end
 
 local function resolve_api_slug(input)

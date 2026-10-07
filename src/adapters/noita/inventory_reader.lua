@@ -4,12 +4,6 @@ local M = {}
 
 local FRAMES_PER_SECOND = 60
 local perk_list_ready = false
-local perk_game_effects = nil
-
--- Perks auto-granted with another altar pick in the same frame (Noita bundled perks).
-local bundled_perk_suppressors = {
-  PROTECTION_EXPLOSION = { "EXPLODING_CORPSES" },
-}
 
 local function ensure_perk_list()
   if perk_list_ready then
@@ -20,76 +14,6 @@ local function ensure_perk_list()
   end)
   perk_list_ready = ok
   return ok
-end
-
-local function ensure_perk_meta()
-  if perk_game_effects ~= nil then
-    return
-  end
-  perk_game_effects = {}
-  if not ensure_perk_list() then
-    return
-  end
-  for _, perk in ipairs(perk_list) do
-    if perk.id and perk.game_effect then
-      perk_game_effects[perk.id] = perk.game_effect
-    end
-  end
-end
-
-local function is_suppressed_telemetry_perk(perk_id, active_ids)
-  ensure_perk_meta()
-  for other_id, _ in pairs(active_ids) do
-    if other_id ~= perk_id then
-      if perk_game_effects and perk_game_effects[other_id] == perk_id then
-        return true
-      end
-      local suppressors = bundled_perk_suppressors[perk_id]
-      if suppressors then
-        for _, parent_id in ipairs(suppressors) do
-          if parent_id == other_id then
-            return true
-          end
-        end
-      end
-    end
-  end
-  return false
-end
-
-function M.filter_telemetry_perk_picks(pick_ids)
-  if #pick_ids <= 1 then
-    return pick_ids
-  end
-
-  local active = {}
-  for _, perk_id in ipairs(pick_ids) do
-    active[perk_id] = true
-  end
-
-  local filtered = {}
-  for _, perk_id in ipairs(pick_ids) do
-    if not is_suppressed_telemetry_perk(perk_id, active) then
-      filtered[#filtered + 1] = perk_id
-    end
-  end
-  return filtered
-end
-
---- True when this perk_id should produce a perk_pick event (hook path).
---- Uses currently owned perks as suppress context (bundled / game_effect companions).
-function M.should_emit_telemetry_perk_pick(perk_id)
-  if perk_id == nil or perk_id == "" then
-    return false
-  end
-
-  local active = {}
-  for owned_id, count in pairs(M.get_perk_counts()) do
-    if count > 0 then
-      active[owned_id] = true
-    end
-  end
-  return not is_suppressed_telemetry_perk(perk_id, active)
 end
 
 --- perk entity VariableStorageComponent name="perk_id" (set by perk_spawn).
@@ -576,24 +500,12 @@ function M.get_perks(_entity_id)
   end
 
   local counts = M.get_perk_counts()
-  local active = {}
-  for perk_id, count in pairs(counts) do
-    if count > 0 then
-      active[perk_id] = true
-    end
-  end
-
   local perks = {}
   for _, perk in ipairs(perk_list) do
-    local perk_id = perk.id
-    local pickup_count = counts[perk_id] or 0
-    if pickup_count > 0 and not is_suppressed_telemetry_perk(perk_id, active) then
-      for _ = 1, pickup_count do
-        perks[#perks + 1] = perk_id
-      end
+    for _ = 1, counts[perk.id] or 0 do
+      perks[#perks + 1] = perk.id
     end
   end
-
   return perks
 end
 
@@ -602,12 +514,34 @@ function M.get_perk_counts()
     return {}
   end
 
-  local counts = {}
+  local game_counts = {}
   for _, perk in ipairs(perk_list) do
     local flag_name = get_perk_picked_flag_name(perk.id)
     local pickup_count = tonumber(GlobalsGetValue(flag_name .. "_PICKUP_COUNT", "0")) or 0
     if GameHasFlagRun(flag_name) and pickup_count > 0 then
-      counts[perk.id] = pickup_count
+      game_counts[perk.id] = pickup_count
+    end
+  end
+
+  -- perk_pickup adds +1 to each remove_other_perks entry (to drop it from the perk pool)
+  -- without granting it, so subtract those to get the perks actually picked up.
+  local counts = {}
+  for perk_id, count in pairs(game_counts) do
+    counts[perk_id] = count
+  end
+  for _, perk in ipairs(perk_list) do
+    local picked = game_counts[perk.id]
+    if picked ~= nil and perk.remove_other_perks ~= nil then
+      for _, other_id in ipairs(perk.remove_other_perks) do
+        if counts[other_id] ~= nil then
+          counts[other_id] = counts[other_id] - picked
+        end
+      end
+    end
+  end
+  for perk_id, count in pairs(counts) do
+    if count <= 0 then
+      counts[perk_id] = nil
     end
   end
   return counts

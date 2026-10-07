@@ -30,8 +30,6 @@ local function blank()
     world_seed = nil,
     run_end_snapshot = nil,
     last_wands_snapshot = nil,
-    kolmis_snapshot_cached = false,
-    pedestal_snapshot_cached = false,
     ending_game_completed_at_start = false,
     next_timeline_at = 0,
   }

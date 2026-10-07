@@ -1,4 +1,4 @@
--- shop_item_pickup: shop_effect.lua item_pickup hook (HM shop buy).
+-- shop_item_pickup: one queued shop_effect.lua item_pickup (HM shop buy) from core/hook_queue.lua.
 -- Sole buy path for vanilla generate_shop_* stock. Steal stays on polls/shop_action.
 
 local run_state = dofile_once("mods/noita-telemetry/src/core/run/run_state.lua")
@@ -11,10 +11,15 @@ local shop_pending = dofile_once("mods/noita-telemetry/src/core/events/polls/sho
 
 local M = {}
 
-function M.emit(entity_item, entity_who_picked, _item_name, cost_before)
+--- fields: { entity_item, picker_entity_id, cost_before } as pushed by the shop_effect hook.
+function M.emit(fields)
   if not writer.is_active() then
     return
   end
+
+  local entity_item = tonumber(fields[1])
+  local entity_who_picked = tonumber(fields[2])
+  local cost_before = tonumber(fields[3])
 
   local state = run_state.get()
   if not state.in_holy_mountain then

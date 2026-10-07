@@ -1,17 +1,24 @@
--- perk_pick: perk_pickup hook (hooks/perk_pickup_append.lua → TelemetryOnPerkPick).
+-- perk_pick: one queued perk_pickup (hooks/perk_pickup_append.lua → core/hook_queue.lua).
 -- JSONL event name remains "perk_pick" (not a poll).
 
 local run_state = dofile_once("mods/noita-telemetry/src/core/run/run_state.lua")
 local emit = dofile_once("mods/noita-telemetry/src/core/events/emit.lua")
 local player_reader = dofile_once("mods/noita-telemetry/src/adapters/noita/player_reader.lua")
 local world_reader = dofile_once("mods/noita-telemetry/src/adapters/noita/world_reader.lua")
-local inventory_reader = dofile_once("mods/noita-telemetry/src/adapters/noita/inventory_reader.lua")
 local writer = dofile_once("mods/noita-telemetry/src/core/run/writer.lua")
 
 local M = {}
 
-function M.emit(entity_item, entity_who_picked, _item_name)
+--- fields: { perk_id, picker_entity_id, frame } as pushed by the perk_pickup hook.
+function M.emit(fields)
   if not writer.is_active() then
+    return
+  end
+
+  local perk_id = fields[1]
+  local picker = tonumber(fields[2])
+  local frame = tonumber(fields[3])
+  if perk_id == nil or perk_id == "" or frame == nil then
     return
   end
 
@@ -20,17 +27,12 @@ function M.emit(entity_item, entity_who_picked, _item_name)
   if player == nil then
     return
   end
-  if entity_who_picked ~= nil and entity_who_picked ~= player then
-    return
-  end
-
-  local perk_id = inventory_reader.get_perk_id(entity_item)
-  if perk_id == nil or not inventory_reader.should_emit_telemetry_perk_pick(perk_id) then
+  if picker ~= nil and picker ~= player then
     return
   end
 
   state.telemetry_perk_pick_index = state.telemetry_perk_pick_index + 1
-  local timing_fields = emit.timing_fields(state)
+  local timing_fields = emit.timing_fields_at(state, frame)
   emit.emit(state, "perk_pick", {
     t_ms = timing_fields.t_ms,
     playtime_sec = timing_fields.playtime_sec,

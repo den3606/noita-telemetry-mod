@@ -1,9 +1,8 @@
--- Finish-snapshot helpers shared by kolmis/pedestal caching and run finalize.
+-- Finish-snapshot helpers shared by victory and run finalize.
 -- Not an event emitter: JSONL rows are written by player_died / victory.
 
 local run_state = dofile_once("mods/noita-telemetry/src/core/run/run_state.lua")
 local inventory_reader = dofile_once("mods/noita-telemetry/src/adapters/noita/inventory_reader.lua")
-local writer = dofile_once("mods/noita-telemetry/src/core/run/writer.lua")
 
 local M = {}
 
@@ -13,14 +12,6 @@ function M.capture(state, player)
     return nil
   end
   return run_state.apply_wand_fallback(state, inventory_reader.get_player_snapshot(player))
-end
-
-function M.cache(state, player)
-  state = state or run_state.get()
-  if player == nil or not writer.is_active() then
-    return
-  end
-  state.run_end_snapshot = M.capture(state, player)
 end
 
 function M.resolve(state, player)

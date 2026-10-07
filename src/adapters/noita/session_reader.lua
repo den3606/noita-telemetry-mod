@@ -1,6 +1,6 @@
 -- Reads per-session values Noita keeps outside the entity world: world seed,
 -- NG+ count, run flags and the stats table (`SessionNumbersGetValue` /
--- `StatsGetValue` / `GlobalsGetValue` / `GameHasFlagRun`).
+-- `StatsGetValue` / `GameHasFlagRun`).
 
 local M = {}
 
@@ -19,8 +19,7 @@ function M.get_world_seed()
 end
 
 function M.get_ng_plus()
-  local ng = GlobalsGetValue("NEW_GAME_PLUS_COUNT", "0")
-  return tonumber(ng) or 0
+  return tonumber(SessionNumbersGetValue("NEW_GAME_PLUS_COUNT")) or 0
 end
 
 function M.is_ending_completed()
