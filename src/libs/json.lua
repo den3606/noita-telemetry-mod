@@ -2,10 +2,14 @@ local M = {}
 
 local function escape_string(value)
   local escaped = value:gsub("\\", "\\\\")
-  escaped = escaped:gsub("\"", "\\\"")
+  escaped = escaped:gsub('"', '\\"')
   escaped = escaped:gsub("\r", "\\r")
   escaped = escaped:gsub("\n", "\\n")
   escaped = escaped:gsub("\t", "\\t")
+  -- JSON forbids raw control characters; %z matches \0 in Lua 5.1 patterns.
+  escaped = escaped:gsub("[%z\1-\31]", function(char)
+    return string.format("\\u%04x", char:byte())
+  end)
   return '"' .. escaped .. '"'
 end
 

@@ -13,6 +13,31 @@ function M.read_error(error_buf)
   return ffi.string(error_buf)
 end
 
+---@class NativeHttpFailure
+---@field detail string
+---@field http_status integer|nil
+---@field api_code string|nil
+---@field disallowed_mods string|nil comma-separated mod ids
+
+local function non_empty(value)
+  if value == "" then
+    return nil
+  end
+  return value
+end
+
+--- Copy a telemetry_http_failure_t out of FFI memory.
+---@return NativeHttpFailure
+function M.read_http_failure(failure)
+  local status = tonumber(failure.http_status)
+  return {
+    detail = ffi.string(failure.detail),
+    http_status = status ~= 0 and status or nil,
+    api_code = non_empty(ffi.string(failure.api_code)),
+    disallowed_mods = non_empty(ffi.string(failure.disallowed_mods)),
+  }
+end
+
 function M.native_export(lib, name)
   if lib == nil then
     return nil

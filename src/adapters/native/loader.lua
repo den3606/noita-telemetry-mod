@@ -6,8 +6,21 @@
 
 local ffi = require("ffi")
 
-local message = dofile_once("mods/noita-telemetry/src/core/messaging.lua")
+local KEYS = dofile_once("mods/noita-telemetry/src/resources/messages.lua").KEYS
 local ffi_call = dofile_once("mods/noita-telemetry/src/adapters/native/ffi_call.lua")
+
+-- Struct typedefs cannot be redeclared, and tests reload this module.
+if not pcall(ffi.typeof, "telemetry_http_failure_t") then
+  -- Mirrors HttpFailureOut in apps/mod-native/telemetry/src/ffi/failure.rs.
+  ffi.cdef([[
+    typedef struct {
+      int http_status;
+      char api_code[64];
+      char detail[256];
+      char disallowed_mods[512];
+    } telemetry_http_failure_t;
+  ]])
+end
 
 ffi.cdef([[
   int telemetry_http_request_async(
@@ -22,8 +35,7 @@ ffi.cdef([[
   int telemetry_http_request_poll(
     char* response_buf,
     size_t response_buf_len,
-    char* error_buf,
-    size_t error_buf_len
+    telemetry_http_failure_t* out_failure
   );
 
   int telemetry_upload_file_async(
@@ -35,8 +47,7 @@ ffi.cdef([[
   );
 
   int telemetry_upload_poll(
-    char* error_buf,
-    size_t error_buf_len
+    telemetry_http_failure_t* out_failure
   );
 
   int telemetry_get_ingest_url(
@@ -123,183 +134,6 @@ ffi.cdef([[
     size_t error_buf_len
   );
 
-  int telemetry_append_timeline_tick(
-    int t_ms,
-    int playtime_sec,
-    const char* biome,
-    double x,
-    double y,
-    double hp_current,
-    double hp_max,
-    int gold,
-    char* error_buf,
-    size_t error_buf_len
-  );
-
-  int telemetry_append_biome_enter(
-    int t_ms,
-    int playtime_sec,
-    const char* biome,
-    const char* from_biome,
-    double x,
-    double y,
-    char* error_buf,
-    size_t error_buf_len
-  );
-
-  int telemetry_append_inventory_carry_start(
-    int t_ms,
-    int playtime_sec,
-    const char* biome,
-    unsigned int entity_id,
-    const char* item_id,
-    const char* item_type,
-    const char* container,
-    int wand_entity_id,
-    char* error_buf,
-    size_t error_buf_len
-  );
-
-  int telemetry_append_inventory_carry_end(
-    int t_ms,
-    int playtime_sec,
-    const char* biome,
-    unsigned int entity_id,
-    const char* item_id,
-    const char* item_type,
-    const char* reason,
-    char* error_buf,
-    size_t error_buf_len
-  );
-
-  int telemetry_append_shop_action(
-    int t_ms,
-    int playtime_sec,
-    const char* biome,
-    double x,
-    double y,
-    int has_position,
-    const char* action,
-    int gold_before,
-    int gold_spent,
-    int gold_after,
-    const char* item_id,
-    const char* item_type,
-    int stole,
-    char* error_buf,
-    size_t error_buf_len
-  );
-
-  int telemetry_append_perk_pick(
-    int t_ms,
-    int playtime_sec,
-    double x,
-    double y,
-    const char* perk_id,
-    int perk_index,
-    const char* biome,
-    char* error_buf,
-    size_t error_buf_len
-  );
-
-  int telemetry_append_god_event(
-    int t_ms,
-    int playtime_sec,
-    double x,
-    double y,
-    int angered,
-    int killed,
-    const char* biome,
-    char* error_buf,
-    size_t error_buf_len
-  );
-
-  int telemetry_append_death(
-    int t_ms,
-    int playtime_sec,
-    const char* biome,
-    double x,
-    double y,
-    const char* killed_by,
-    const char* killed_with,
-    double hp_current,
-    double hp_max,
-    char* error_buf,
-    size_t error_buf_len
-  );
-
-  int telemetry_append_run_start(
-    int t_ms,
-    int playtime_sec,
-    int seed,
-    int ng_plus,
-    const char* game_mode,
-    const char* noita_version,
-    const char* mods_json,
-    double x,
-    double y,
-    double hp_current,
-    double hp_max,
-    const char* wands_json,
-    const char* items_json,
-    char* error_buf,
-    size_t error_buf_len
-  );
-
-  int telemetry_append_run_end(
-    int t_ms,
-    int playtime_sec,
-    const char* result,
-    double x,
-    double y,
-    double hp_current,
-    double hp_max,
-    int gold,
-    int enemies_killed,
-    int places_visited,
-    int projectiles_shot,
-    const char* wands_json,
-    const char* items_json,
-    const char* perks_json,
-    char* error_buf,
-    size_t error_buf_len
-  );
-
-  int telemetry_append_holy_mountain_enter(
-    int t_ms,
-    int playtime_sec,
-    const char* biome,
-    double x,
-    double y,
-    int gold,
-    double hp_current,
-    double hp_max,
-    int wand_count,
-    int item_count,
-    const char* wands_json,
-    const char* items_json,
-    const char* perks_json,
-    char* error_buf,
-    size_t error_buf_len
-  );
-
-  int telemetry_append_holy_mountain_exit(
-    int t_ms,
-    int playtime_sec,
-    const char* biome,
-    double x,
-    double y,
-    int gold,
-    int gold_spent_total,
-    double hp_current,
-    double hp_max,
-    const char* wands_json,
-    const char* items_json,
-    const char* perks_json,
-    char* error_buf,
-    size_t error_buf_len
-  );
-
   int telemetry_run_close(
     const char* runs_dir,
     const char* run_id,
@@ -339,10 +173,10 @@ end
 
 local function get_baked_url(export_name)
   if M.lib == nil then
-    return nil, message.KEYS.MSG_ERROR_NATIVE_DLL_MISSING
+    return nil, KEYS.MSG_ERROR_NATIVE_DLL_MISSING
   end
   if M.lib[export_name] == nil then
-    return nil, message.KEYS.MSG_ERROR_NATIVE_EXPORT_MISSING
+    return nil, KEYS.MSG_ERROR_NATIVE_EXPORT_MISSING
   end
 
   local out_buf = ffi.new("char[?]", 512)
@@ -350,12 +184,12 @@ local function get_baked_url(export_name)
   if result == 0 then
     local url = ffi.string(out_buf)
     if url == nil or url == "" then
-      return nil, message.KEYS.MSG_ERROR_API_URL_MISSING
+      return nil, KEYS.MSG_ERROR_API_URL_MISSING
     end
     return url
   end
 
-  return nil, message.KEYS.MSG_ERROR_API_URL_MISSING
+  return nil, KEYS.MSG_ERROR_API_URL_MISSING
 end
 
 function M.get_ingest_url()
@@ -421,15 +255,15 @@ function M.get_poll_interval_frames()
     return cache.poll_interval_frames
   end
   if M.lib == nil then
-    return nil, message.KEYS.MSG_ERROR_NATIVE_DLL_MISSING
+    return nil, KEYS.MSG_ERROR_NATIVE_DLL_MISSING
   end
   if M.lib.telemetry_get_poll_interval_frames == nil then
-    return nil, message.KEYS.MSG_ERROR_NATIVE_EXPORT_MISSING
+    return nil, KEYS.MSG_ERROR_NATIVE_EXPORT_MISSING
   end
 
   local value = M.lib.telemetry_get_poll_interval_frames()
   if type(value) ~= "number" or value <= 0 then
-    return nil, message.KEYS.MSG_ERROR_POLL_INTERVAL_INVALID
+    return nil, KEYS.MSG_ERROR_POLL_INTERVAL_INVALID
   end
 
   cache.poll_interval_frames = value
@@ -441,15 +275,15 @@ function M.get_timeline_interval_sec()
     return cache.timeline_interval_sec
   end
   if M.lib == nil then
-    return nil, message.KEYS.MSG_ERROR_NATIVE_DLL_MISSING
+    return nil, KEYS.MSG_ERROR_NATIVE_DLL_MISSING
   end
   if M.lib.telemetry_get_timeline_interval_sec == nil then
-    return nil, message.KEYS.MSG_ERROR_NATIVE_EXPORT_MISSING
+    return nil, KEYS.MSG_ERROR_NATIVE_EXPORT_MISSING
   end
 
   local value = M.lib.telemetry_get_timeline_interval_sec()
   if type(value) ~= "number" or value <= 0 then
-    return nil, message.KEYS.MSG_ERROR_TIMELINE_INTERVAL_INVALID
+    return nil, KEYS.MSG_ERROR_TIMELINE_INTERVAL_INVALID
   end
 
   cache.timeline_interval_sec = value

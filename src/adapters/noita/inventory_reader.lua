@@ -1,3 +1,5 @@
+local item_rules = dofile_once("mods/noita-telemetry/src/domain/item.lua")
+local perk_rules = dofile_once("mods/noita-telemetry/src/domain/perk.lua")
 local player_reader = dofile_once("mods/noita-telemetry/src/adapters/noita/player_reader.lua")
 local world_reader = dofile_once("mods/noita-telemetry/src/adapters/noita/world_reader.lua")
 local M = {}
@@ -42,10 +44,6 @@ local function get_component(entity_id, component_name)
   return EntityGetFirstComponentIncludingDisabled(entity_id, component_name)
 end
 
-local function is_alive_entity(entity_id)
-  return entity_id ~= nil and EntityGetIsAlive(entity_id)
-end
-
 local function is_wand(entity_id)
   local ability = get_component(entity_id, "AbilityComponent")
   if ability == nil then
@@ -75,14 +73,18 @@ local function get_wand_spell_entries(wand_entity_id)
       local action_id = ComponentGetValue2(item_action, "action_id")
       if action_id ~= nil and action_id ~= "" then
         local inventory_x = 999
+        local always_cast = false
         local item_component = get_component(spell_entity_id, "ItemComponent")
         if item_component ~= nil then
           inventory_x = ComponentGetValue2(item_component, "inventory_slot") or 999
+          -- Always-cast spells are attached for good and sit outside the wand's slots.
+          always_cast = ComponentGetValue2(item_component, "permanently_attached") == true
         end
         spells[#spells + 1] = {
           entity_id = spell_entity_id,
           action_id = action_id,
           inventory_x = inventory_x,
+          always_cast = always_cast,
         }
       end
     end
@@ -95,13 +97,29 @@ local function get_wand_spell_entries(wand_entity_id)
   return spells
 end
 
+--- Slotted spell ids in slot order, then the always-cast spell ids.
 local function get_wand_spells(wand_entity_id)
-  local entries = get_wand_spell_entries(wand_entity_id)
   local spell_ids = {}
-  for _, spell in ipairs(entries) do
-    spell_ids[#spell_ids + 1] = spell.action_id
+  local always_cast_ids = {}
+  for _, spell in ipairs(get_wand_spell_entries(wand_entity_id)) do
+    if spell.always_cast then
+      always_cast_ids[#always_cast_ids + 1] = spell.action_id
+    else
+      spell_ids[#spell_ids + 1] = spell.action_id
+    end
   end
-  return spell_ids
+  return spell_ids, always_cast_ids
+end
+
+--- Spells the player can take off the wand: always-cast spells are not carried items.
+local function get_wand_carried_spell_entries(wand_entity_id)
+  local entries = {}
+  for _, spell in ipairs(get_wand_spell_entries(wand_entity_id)) do
+    if not spell.always_cast then
+      entries[#entries + 1] = spell
+    end
+  end
+  return entries
 end
 
 local function get_wand_stats(wand_entity_id)
@@ -122,7 +140,7 @@ local function get_wand_stats(wand_entity_id)
 end
 
 function M.get_inventory_entity_ids(entity_id)
-  if not is_alive_entity(entity_id) then
+  if not world_reader.is_alive(entity_id) then
     return {}
   end
 
@@ -137,14 +155,14 @@ end
 --- Spells (bag + wand slots) and non-wand items the player is carrying, keyed by entity id.
 function M.get_carried_entities(player_entity_id)
   local carried = {}
-  if not is_alive_entity(player_entity_id) then
+  if not world_reader.is_alive(player_entity_id) then
     return carried
   end
 
   local inventory = GameGetAllInventoryItems(player_entity_id) or {}
   for _, entity_id in ipairs(inventory) do
     if is_wand(entity_id) then
-      for _, spell in ipairs(get_wand_spell_entries(entity_id)) do
+      for _, spell in ipairs(get_wand_carried_spell_entries(entity_id)) do
         carried[spell.entity_id] = {
           entity_id = spell.entity_id,
           item_id = spell.action_id,
@@ -187,29 +205,19 @@ function M.classify_item(entity_id)
     return "other", ""
   end
 
-  if is_wand(entity_id) then
-    return "wand", get_item_name(entity_id)
-  end
-
+  local action_id = nil
   local item_action = get_component(entity_id, "ItemActionComponent")
   if item_action ~= nil then
-    local action_id = ComponentGetValue2(item_action, "action_id")
-    if action_id ~= nil and action_id ~= "" then
-      return "spell", action_id
-    end
+    action_id = ComponentGetValue2(item_action, "action_id")
   end
-
   local material_id = GetMaterialInventoryMainMaterial(entity_id, true)
-  if material_id ~= nil and material_id > 0 then
-    return "potion", get_item_name(entity_id)
-  end
 
-  local item_name = get_item_name(entity_id)
-  if string.find(item_name, "potion", 1, true) ~= nil then
-    return "potion", item_name
-  end
-
-  return "other", item_name
+  return item_rules.classify({
+    is_wand = is_wand(entity_id),
+    action_id = action_id,
+    has_material = material_id ~= nil and material_id > 0,
+    name = get_item_name(entity_id),
+  })
 end
 
 function M.describe_item(entity_id)
@@ -221,111 +229,25 @@ function M.describe_item(entity_id)
   }
 end
 
-local SHOP_SCAN_RADIUS = 900
-
-function M.get_item_shop_cost(entity_id)
+--- ItemCostComponent's cost, 0 included; nil once the component is gone (bought or stolen).
+function M.get_shop_price(entity_id)
   if entity_id == nil then
     return nil
   end
-
   local cost_component = get_component(entity_id, "ItemCostComponent")
   if cost_component == nil then
     return nil
   end
+  return tonumber(ComponentGetValue2(cost_component, "cost"))
+end
 
-  local cost = tonumber(ComponentGetValue2(cost_component, "cost"))
+--- A positive price, or nil.
+function M.get_item_shop_cost(entity_id)
+  local cost = M.get_shop_price(entity_id)
   if cost == nil or cost <= 0 then
     return nil
   end
-
   return cost
-end
-
-function M.has_shop_cost(entity_id)
-  return M.get_item_shop_cost(entity_id) ~= nil
-end
-
-function M.scan_shop_stock(player_entity_id, radius)
-  radius = radius or SHOP_SCAN_RADIUS
-  if player_entity_id == nil then
-    return {}
-  end
-
-  local position = world_reader.get_position(player_entity_id)
-  if position == nil then
-    return {}
-  end
-
-  local inventory_ids = M.get_inventory_entity_ids(player_entity_id)
-  local stock = {}
-  local entities = EntityGetInRadius(position.x, position.y, radius) or {}
-
-  for _, entity_id in ipairs(entities) do
-    if entity_id ~= player_entity_id and inventory_ids[entity_id] ~= true then
-      local cost = M.get_item_shop_cost(entity_id)
-      if cost ~= nil then
-        local description = M.describe_item(entity_id)
-        stock[entity_id] = {
-          entity_id = entity_id,
-          item_id = description.item_id,
-          item_type = description.item_type,
-          cost = cost,
-        }
-      end
-    end
-  end
-
-  return stock
-end
-
-function M.find_removed_shop_stock(previous_stock, current_stock, inventory_ids)
-  local removed = {}
-
-  for entity_id, meta in pairs(previous_stock or {}) do
-    if current_stock[entity_id] == nil then
-      local in_inventory = inventory_ids ~= nil and inventory_ids[entity_id] == true
-      if in_inventory or not EntityGetIsAlive(entity_id) then
-        removed[#removed + 1] = meta
-      end
-    end
-  end
-
-  return removed
-end
-
---- Shop items that dropped out of the radius scan (includes carried-in-hand / cost zeroed).
-function M.find_disappeared_shop_stock(previous_stock, current_stock)
-  local removed = {}
-
-  for entity_id, meta in pairs(previous_stock or {}) do
-    if current_stock[entity_id] == nil then
-      removed[#removed + 1] = meta
-    end
-  end
-
-  return removed
-end
-
-function M.match_shop_steals(removed_shop, new_item_entity_ids)
-  local steals = {}
-  local used_removed = {}
-
-  for _, item_entity_id in ipairs(new_item_entity_ids) do
-    local description = M.describe_item(item_entity_id)
-
-    for index, meta in ipairs(removed_shop) do
-      if not used_removed[index]
-        and meta.item_id == description.item_id
-        and meta.item_type == description.item_type
-      then
-        used_removed[index] = true
-        steals[#steals + 1] = item_entity_id
-        break
-      end
-    end
-  end
-
-  return steals
 end
 
 local function append_non_wand_item(items, item_entity_id, item_type, item_id)
@@ -366,7 +288,7 @@ local function append_non_wand_item(items, item_entity_id, item_type, item_id)
 end
 
 local function append_wand_carried(carried, wand_entity_id)
-  for _, spell in ipairs(get_wand_spell_entries(wand_entity_id)) do
+  for _, spell in ipairs(get_wand_carried_spell_entries(wand_entity_id)) do
     carried[spell.entity_id] = {
       entity_id = spell.entity_id,
       item_id = spell.action_id,
@@ -399,7 +321,7 @@ function M.scan_inventory(player_entity_id)
     inventory_ids = {},
     item_count = 0,
   }
-  if not is_alive_entity(player_entity_id) then
+  if not world_reader.is_alive(player_entity_id) then
     return empty
   end
 
@@ -414,17 +336,14 @@ function M.scan_inventory(player_entity_id)
     inventory_ids[entity_id] = true
 
     if is_wand(entity_id) then
-      local spell_entries = get_wand_spell_entries(entity_id)
-      local spell_ids = {}
-      for _, spell in ipairs(spell_entries) do
-        spell_ids[#spell_ids + 1] = spell.action_id
-      end
+      local spell_ids, always_cast_ids = get_wand_spells(entity_id)
 
       wands[#wands + 1] = {
         entity_id = entity_id,
         name = get_item_name(entity_id),
         stats = get_wand_stats(entity_id),
         spells = spell_ids,
+        always_cast = always_cast_ids,
         spell_count = #spell_ids,
       }
       append_wand_carried(carried, entity_id)
@@ -452,8 +371,24 @@ function M.scan_inventory(player_entity_id)
   }
 end
 
+--- One wand's name, stats, slotted spells in slot order and always-cast spells; nil when the entity is not a wand.
+function M.get_wand(wand_entity_id)
+  if not is_wand(wand_entity_id) then
+    return nil
+  end
+  local spells, always_cast = get_wand_spells(wand_entity_id)
+  return {
+    entity_id = wand_entity_id,
+    name = get_item_name(wand_entity_id),
+    stats = get_wand_stats(wand_entity_id),
+    spells = spells,
+    always_cast = always_cast,
+    spell_count = #spells,
+  }
+end
+
 function M.get_wands(entity_id)
-  if not is_alive_entity(entity_id) then
+  if not world_reader.is_alive(entity_id) then
     return {}
   end
 
@@ -461,15 +396,9 @@ function M.get_wands(entity_id)
   local items = GameGetAllInventoryItems(entity_id) or {}
 
   for _, item_entity_id in ipairs(items) do
-    if is_wand(item_entity_id) then
-      local spells = get_wand_spells(item_entity_id)
-      wands[#wands + 1] = {
-        entity_id = item_entity_id,
-        name = get_item_name(item_entity_id),
-        stats = get_wand_stats(item_entity_id),
-        spells = spells,
-        spell_count = #spells,
-      }
+    local wand = M.get_wand(item_entity_id)
+    if wand ~= nil then
+      wands[#wands + 1] = wand
     end
   end
 
@@ -477,7 +406,7 @@ function M.get_wands(entity_id)
 end
 
 function M.get_items(entity_id)
-  if not is_alive_entity(entity_id) then
+  if not world_reader.is_alive(entity_id) then
     return {}
   end
 
@@ -523,28 +452,7 @@ function M.get_perk_counts()
     end
   end
 
-  -- perk_pickup adds +1 to each remove_other_perks entry (to drop it from the perk pool)
-  -- without granting it, so subtract those to get the perks actually picked up.
-  local counts = {}
-  for perk_id, count in pairs(game_counts) do
-    counts[perk_id] = count
-  end
-  for _, perk in ipairs(perk_list) do
-    local picked = game_counts[perk.id]
-    if picked ~= nil and perk.remove_other_perks ~= nil then
-      for _, other_id in ipairs(perk.remove_other_perks) do
-        if counts[other_id] ~= nil then
-          counts[other_id] = counts[other_id] - picked
-        end
-      end
-    end
-  end
-  for perk_id, count in pairs(counts) do
-    if count <= 0 then
-      counts[perk_id] = nil
-    end
-  end
-  return counts
+  return perk_rules.picked_counts(game_counts, perk_list)
 end
 
 function M.get_player_snapshot(entity_id)

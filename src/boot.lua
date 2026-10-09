@@ -3,8 +3,8 @@
 -- Validates native DLL + build-embedded config via loader getters; on failure
 -- prints branded MSG_ERROR_* and aborts.
 
-local version = dofile_once("mods/noita-telemetry/src/core/version.lua")
-local message = dofile_once("mods/noita-telemetry/src/core/messaging.lua")
+local version = dofile_once("mods/noita-telemetry/src/application/version.lua")
+local message = dofile_once("mods/noita-telemetry/src/application/messaging.lua")
 local noita_message = dofile_once("mods/noita-telemetry/src/adapters/noita/message.lua")
 local loader = dofile_once("mods/noita-telemetry/src/adapters/native/loader.lua")
 
@@ -53,10 +53,7 @@ ModLuaFileAppend(
   "mods/noita-telemetry/src/adapters/noita/hooks/perk_reroll_append.lua"
 )
 
-ModLuaFileAppend(
-  "data/scripts/perks/perk.lua",
-  "mods/noita-telemetry/src/adapters/noita/hooks/perk_pickup_append.lua"
-)
+ModLuaFileAppend("data/scripts/perks/perk.lua", "mods/noita-telemetry/src/adapters/noita/hooks/perk_pickup_append.lua")
 
 ModLuaFileAppend(
   "data/scripts/items/shop_effect.lua",

@@ -10,9 +10,9 @@ function M.get_world_seed()
     return tonumber(seed)
   end
 
-  seed = StatsGetValue("world_seed")
-  if seed ~= nil and seed ~= "" then
-    return tonumber(seed)
+  local stat_seed = StatsGetValue("world_seed")
+  if stat_seed ~= nil and stat_seed ~= "" then
+    return tonumber(stat_seed)
   end
 
   return nil

@@ -1,9 +1,9 @@
 dofile_once("mods/noita-telemetry/src/boot.lua")
 
-local streak_patch = dofile_once("mods/noita-telemetry/src/core/streak.lua")
-local events = dofile_once("mods/noita-telemetry/src/core/events.lua")
-local message = dofile_once("mods/noita-telemetry/src/core/messaging.lua")
-local safe_call = dofile_once("mods/noita-telemetry/src/core/safe_call.lua")
+local streak_patch = dofile_once("mods/noita-telemetry/src/application/streak.lua")
+local events = dofile_once("mods/noita-telemetry/src/application/events.lua")
+local message = dofile_once("mods/noita-telemetry/src/application/messaging.lua")
+local safe_call = dofile_once("mods/noita-telemetry/src/application/safe_call.lua")
 
 local function try_apply_streak_patch()
   if not streak_patch.is_enabled() then

@@ -1,6 +1,6 @@
 -- Reads the active mod list (`ModGetActiveModIDs` / `ModIsEnabled`).
 -- What a given mod means for a run (e.g. nightmare) is decided in
--- core/game_mode.lua.
+-- domain/game_mode.lua.
 
 local M = {}
 

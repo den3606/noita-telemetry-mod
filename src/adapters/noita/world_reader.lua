@@ -1,6 +1,6 @@
 -- Reads positions, biome names and nearby entities from the world
 -- (`EntityGetTransform` / `BiomeMapGetName` / `EntityGetInRadius`).
--- Biome name -> meaning is decided in core/biome.lua.
+-- Biome name -> meaning is decided in domain/biome.lua.
 
 local M = {}
 
@@ -45,6 +45,10 @@ function M.find_stevari_near(entity_id, radius)
   end
 
   return nil
+end
+
+function M.is_alive(entity_id)
+  return entity_id ~= nil and EntityGetIsAlive(entity_id)
 end
 
 function M.is_stevari_alive(stevari_id)

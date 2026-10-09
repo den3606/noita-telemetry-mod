@@ -1,6 +1,6 @@
 dofile("data/scripts/lib/mod_settings.lua")
 
-local message = dofile_once("mods/noita-telemetry/src/core/messaging.lua")
+local message = dofile_once("mods/noita-telemetry/src/application/messaging.lua")
 local KEYS = message.KEYS
 
 local mod_id = "noita-telemetry"

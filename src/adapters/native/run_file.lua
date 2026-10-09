@@ -2,7 +2,7 @@
 -- ULID minting lives in native/ulid.lua.
 
 local ffi = require("ffi")
-local message = dofile_once("mods/noita-telemetry/src/core/messaging.lua")
+local KEYS = dofile_once("mods/noita-telemetry/src/resources/messages.lua").KEYS
 local loader = dofile_once("mods/noita-telemetry/src/adapters/native/loader.lua")
 local ffi_call = dofile_once("mods/noita-telemetry/src/adapters/native/ffi_call.lua")
 
@@ -12,7 +12,7 @@ local M = {}
 
 function M.run_open(runs_dir, run_id, header_json)
   if lib == nil then
-    return false, "telemetry_native.dll not found (run npm run build:native)"
+    return false, KEYS.MSG_ERROR_NATIVE_DLL_MISSING
   end
 
   local error_buf = ffi.new("char[?]", 256)
@@ -26,7 +26,7 @@ end
 
 function M.run_resume(runs_dir, run_id)
   if lib == nil then
-    return false, "telemetry_native.dll not found (run npm run build:native)"
+    return false, KEYS.MSG_ERROR_NATIVE_DLL_MISSING
   end
 
   local error_buf = ffi.new("char[?]", 256)
@@ -40,7 +40,7 @@ end
 
 function M.run_append(event_json)
   if lib == nil then
-    return false, "telemetry_native.dll not found (run npm run build:native)"
+    return false, KEYS.MSG_ERROR_NATIVE_DLL_MISSING
   end
 
   local error_buf = ffi.new("char[?]", 256)
@@ -54,7 +54,7 @@ end
 
 function M.run_close(runs_dir, run_id, footer_json)
   if lib == nil then
-    return false, "telemetry_native.dll not found (run npm run build:native)"
+    return false, KEYS.MSG_ERROR_NATIVE_DLL_MISSING
   end
 
   local error_buf = ffi.new("char[?]", 256)
@@ -69,10 +69,10 @@ end
 --- Merge JSON fields into the header line of a finished .run file.
 function M.run_patch_header(runs_dir, run_id, fields_json)
   if lib == nil then
-    return false, message.KEYS.MSG_ERROR_NATIVE_DLL_MISSING
+    return false, KEYS.MSG_ERROR_NATIVE_DLL_MISSING
   end
   if ffi_call.native_export(lib, "telemetry_run_patch_header") == nil then
-    return false, message.KEYS.MSG_ERROR_NATIVE_EXPORT_MISSING
+    return false, KEYS.MSG_ERROR_NATIVE_EXPORT_MISSING
   end
 
   local error_buf = ffi.new("char[?]", 256)
@@ -87,10 +87,10 @@ end
 --- Whether the .run file exists and has no footer yet (resumable).
 function M.run_is_active(runs_dir, run_id)
   if lib == nil then
-    return nil, message.KEYS.MSG_ERROR_NATIVE_DLL_MISSING
+    return nil, KEYS.MSG_ERROR_NATIVE_DLL_MISSING
   end
   if ffi_call.native_export(lib, "telemetry_run_is_active") == nil then
-    return nil, message.KEYS.MSG_ERROR_NATIVE_EXPORT_MISSING
+    return nil, KEYS.MSG_ERROR_NATIVE_EXPORT_MISSING
   end
 
   local out_active = ffi.new("int[1]")
@@ -105,10 +105,10 @@ end
 
 function M.run_delete(run_path)
   if lib == nil then
-    return false, message.KEYS.MSG_ERROR_NATIVE_DLL_MISSING
+    return false, KEYS.MSG_ERROR_NATIVE_DLL_MISSING
   end
   if ffi_call.native_export(lib, "telemetry_run_delete") == nil then
-    return false, message.KEYS.MSG_ERROR_NATIVE_EXPORT_MISSING
+    return false, KEYS.MSG_ERROR_NATIVE_EXPORT_MISSING
   end
 
   local error_buf = ffi.new("char[?]", 256)
